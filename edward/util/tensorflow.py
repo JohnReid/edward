@@ -5,7 +5,6 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 
-from edward.util.random_variables import get_dims
 from edward.util.graphs import get_session
 from tensorflow.python.ops import control_flow_ops
 
@@ -41,7 +40,7 @@ def dot(x, y):
   x = control_flow_ops.with_dependencies(dependencies, x)
   y = control_flow_ops.with_dependencies(dependencies, y)
 
-  if len(x.get_shape()) == 1:
+  if len(x.shape) == 1:
     vec = x
     mat = y
     return tf.reshape(tf.matmul(tf.expand_dims(vec, 0), mat), [-1])
@@ -189,7 +188,7 @@ def reduce_logmeanexp(input_tensor, axis=None, keep_dims=False):
   """
   logsumexp = tf.reduce_logsumexp(input_tensor, axis, keep_dims)
   input_tensor = tf.convert_to_tensor(input_tensor)
-  n = input_tensor.get_shape().as_list()
+  n = input_tensor.shape.as_list()
   if axis is None:
     n = tf.cast(tf.reduce_prod(n), logsumexp.dtype)
   else:
@@ -226,8 +225,8 @@ def to_simplex(x):
   dependencies = [tf.verify_tensor_all_finite(x, msg='')]
   x = control_flow_ops.with_dependencies(dependencies, x)
 
-  if isinstance(x, tf.Tensor) or isinstance(x, tf.Variable):
-    shape = get_dims(x)
+  if isinstance(x, (tf.Tensor, tf.Variable)):
+    shape = x.get_shape().as_list()
   else:
     shape = x.shape
 
@@ -282,7 +281,7 @@ def get_control_variate_coef(f, h):
   f_mu = tf.reduce_mean(f)
   h_mu = tf.reduce_mean(h)
 
-  n = f.get_shape()[0].value
+  n = f.shape[0].value
 
   cov_fh = tf.reduce_sum((f - f_mu) * (h - h_mu)) / (n - 1)
   var_h = tf.reduce_sum(tf.square(h - h_mu)) / (n - 1)

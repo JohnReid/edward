@@ -4,8 +4,11 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-from tensorflow.python.client.session import \
-    register_session_run_conversion_functions
+try:
+  from tensorflow.python.client.session import \
+      register_session_run_conversion_functions
+except Exception as e:
+  raise ImportError("{0}. Your TensorFlow version is not supported.".format(e))
 
 RANDOM_VARIABLE_COLLECTION = "_random_variable_collection_"
 
@@ -70,9 +73,9 @@ class RandomVariable(object):
 
     if value is not None:
       t_value = tf.convert_to_tensor(value, self.dtype)
-      expected_shape = (self.get_batch_shape().as_list() +
-                        self.get_event_shape().as_list())
-      value_shape = t_value.get_shape().as_list()
+      value_shape = t_value.shape
+      expected_shape = self.get_batch_shape().concatenate(
+          self.get_event_shape())
       if value_shape != expected_shape:
         raise ValueError(
             "Incompatible shape for initialization argument 'value'. "
@@ -88,17 +91,22 @@ class RandomVariable(object):
             "value argument or implement sample for {0}."
             .format(self.__class__.__name__))
 
+  @property
+  def shape(self):
+    """Shape of random variable."""
+    return self._value.shape
+
   def __str__(self):
     return "RandomVariable(\"%s\"%s%s%s)" % (
         self.name,
-        (", shape=%s" % self.get_shape())
-        if self.get_shape().ndims is not None else "",
+        (", shape=%s" % self.shape)
+        if self.shape.ndims is not None else "",
         (", dtype=%s" % self.dtype.name) if self.dtype else "",
         (", device=%s" % self.value().device) if self.value().device else "")
 
   def __repr__(self):
     return "<ed.RandomVariable '%s' shape=%s dtype=%s>" % (
-        self.name, self.get_shape(), self.dtype.name)
+        self.name, self.shape, self.dtype.name)
 
   def __add__(self, other):
     return tf.add(self, other)
@@ -281,17 +289,21 @@ class RandomVariable(object):
 
   def get_shape(self):
     """Get shape of random variable."""
-    return self._value.get_shape()
+    return self.shape
 
+  @staticmethod
   def _session_run_conversion_fetch_function(tensor):
     return ([tensor.value()], lambda val: val[0])
 
+  @staticmethod
   def _session_run_conversion_feed_function(feed, feed_val):
     return [(feed.value(), feed_val)]
 
+  @staticmethod
   def _session_run_conversion_feed_function_for_partial_run(feed):
     return [feed.value()]
 
+  @staticmethod
   def _tensor_conversion_function(v, dtype=None, name=None, as_ref=False):
     _ = name
     if dtype and not dtype.is_compatible_with(v.dtype):

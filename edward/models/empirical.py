@@ -12,6 +12,24 @@ class Empirical(RandomVariable, Distribution):
   """Empirical random variable."""
   def __init__(self, params, validate_args=False, allow_nan_stats=True,
                name="Empirical", *args, **kwargs):
+    """Initialize an ``Empirical`` random variable.
+
+    Parameters
+    ----------
+    params : tf.Tensor
+      Collection of samples. Its outer (left-most) dimension
+      determines the number of samples.
+
+    Examples
+    --------
+    >>> # 100 samples of a scalar
+    >>> x = Empirical(params=tf.zeros(100))
+    >>> assert x.shape == ()
+    >>>
+    >>> # 5 samples of a 2 x 3 matrix
+    >>> dp = Empirical(params=tf.zeros([5, 2, 3]))
+    >>> assert x.shape == (2, 3)
+    """
     parameters = locals()
     parameters.pop("self")
     with tf.name_scope(name, values=[params]) as ns:
@@ -22,16 +40,16 @@ class Empirical(RandomVariable, Distribution):
         except ValueError:  # scalar params
           self._n = tf.constant(1)
 
-        super(Empirical, self).__init__(
-            dtype=self._params.dtype,
-            is_continuous=False,
-            is_reparameterized=True,
-            validate_args=validate_args,
-            allow_nan_stats=allow_nan_stats,
-            parameters=parameters,
-            graph_parents=[self._params, self._n],
-            name=ns,
-            *args, **kwargs)
+      super(Empirical, self).__init__(
+          dtype=self._params.dtype,
+          is_continuous=False,
+          is_reparameterized=True,
+          validate_args=validate_args,
+          allow_nan_stats=allow_nan_stats,
+          parameters=parameters,
+          graph_parents=[self._params, self._n],
+          name=ns,
+          *args, **kwargs)
 
   @staticmethod
   def _param_shapes(sample_shape):
@@ -57,7 +75,7 @@ class Empirical(RandomVariable, Distribution):
     return tf.shape(self.params)[1:]
 
   def _get_event_shape(self):
-    return self.params.get_shape()[1:]
+    return self.params.shape[1:]
 
   def _mean(self):
     return tf.reduce_mean(self.params, 0)
@@ -72,7 +90,7 @@ class Empirical(RandomVariable, Distribution):
 
   def _sample_n(self, n, seed=None):
     input_tensor = self.params
-    if len(input_tensor.get_shape()) == 0:
+    if len(input_tensor.shape) == 0:
       input_tensor = tf.expand_dims(input_tensor, 0)
       multiples = tf.concat(
           [tf.expand_dims(n, 0), [1] * len(self.get_event_shape())], 0)

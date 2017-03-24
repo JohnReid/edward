@@ -6,7 +6,7 @@ import six
 import tensorflow as tf
 
 from edward.inferences.variational_inference import VariationalInference
-from edward.models import RandomVariable, Normal
+from edward.models import RandomVariable
 from edward.util import copy
 
 
