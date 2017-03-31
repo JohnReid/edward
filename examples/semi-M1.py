@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Semi-supervised learning
 
-An attempt to implement some ideas from:
+Some ideas from:
 
   Semi-supervised Learning with Deep Generative Models, Kingma et al.
 """
@@ -13,9 +13,6 @@ import os, math
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
-# from scipy.misc import imsave
-from scipy.special import expit
-import pandas as pd
 import tensorflow as tf
 from tensorflow.contrib import slim
 from tensorflow.examples.tutorials.mnist import input_data
@@ -23,6 +20,24 @@ from keras.models import Sequential
 from keras.layers import Dense, Activation
 import edward as ed
 from edward.models import Normal, Bernoulli
+
+
+DATA_DIR = "data/mnist"
+IMG_DIR = "img"
+
+# DATA. MNIST batches are fed at training time.
+mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
+
+if not os.path.exists(DATA_DIR):
+  os.makedirs(DATA_DIR)
+if not os.path.exists(IMG_DIR):
+  os.makedirs(IMG_DIR)
+
+
+#
+# Model M1
+# Latent-feature discriminative model
+#
 
 
 def generative_network(z):
@@ -42,6 +57,16 @@ def generative_network(z):
     net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
     net = slim.flatten(net)
     return net
+
+
+# The generative model
+#
+d = 10   # Number of dimensions of z
+M = 128  # Mini-batch size
+z = Normal(mu=tf.zeros([M, d]), sigma=tf.ones([M, d]))
+logits = generative_network(z)
+x = Bernoulli(logits=logits)
+hidden_rep = tf.sigmoid(logits)
 
 
 def inference_network(x):
@@ -66,33 +91,6 @@ def inference_network(x):
   sigma = tf.nn.softplus(params[:, d:])
   return mu, sigma
 
-
-DATA_DIR = "data/mnist"
-IMG_DIR = "img"
-
-# DATA. MNIST batches are fed at training time.
-mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
-
-if not os.path.exists(DATA_DIR):
-  os.makedirs(DATA_DIR)
-if not os.path.exists(IMG_DIR):
-  os.makedirs(IMG_DIR)
-
-
-#
-# Model M1
-# Latent-feature discriminative model
-#
-
-# The generative model
-#
-d = 10   # Number of dimensions of z
-M = 128  # Mini-batch size
-z = Normal(mu=tf.zeros([M, d]), sigma=tf.ones([M, d]))
-logits = generative_network(z)
-x = Bernoulli(logits=logits)
-hidden_rep = tf.sigmoid(logits)
-
 # Recognition model
 #
 # Define a subgraph of the variational model, corresponding to a
@@ -113,14 +111,17 @@ sess = ed.get_session()
 init = tf.global_variables_initializer()
 init.run()
 
-rows = int(np.sqrt(M))      # Number rows in PPC output image
-cols = math.ceil(M / rows)  # Number columns in PPC output image
-def create_image_array(imgs):
+def create_image_array(imgs, rows=None, cols=None):
+  N = len(imgs)
+  if rows is None:
+    rows = int(np.sqrt(N))      # Number rows in output image
+  if cols is None:
+    cols = math.ceil(N / rows)  # Number columns in output image
   imarray = np.zeros((rows * 28, cols * 28), dtype = imgs[0].dtype)
-  for m in range(M):
-    row = int(m / cols)
-    col = m % cols
-    imarray[row*28:(row+1)*28, col*28:(col+1)*28] = imgs[m].reshape(28, 28)
+  for n in range(N):
+    row = int(n / cols)
+    col = n % cols
+    imarray[row*28:(row+1)*28, col*28:(col+1)*28] = imgs[n].reshape(28, 28)
   return Image.fromarray(255 * imarray).convert('RGB')
 
 #
@@ -143,12 +144,12 @@ for _ in range(n_epoch):
   # Print a lower bound to the average marginal likelihood for an
   # image.
   avg_loss = total_loss / n_iter_per_epoch / M
-  print("Epoch: {:0>3}; log p(x) >= {:0.3f}".format(len(avg_losses), avg_loss))
+  print("Epoch: {:0>3}; log p(x) >= {:0.3f}".format(len(avg_losses), -avg_loss))
   avg_losses += [avg_loss]
 
   # Posterior predictive check.
   create_image_array(hidden_rep.eval()).save(
-      os.path.join(IMG_DIR, 'ppc-{:0>3}.png'.format(epoch)))
+    os.path.join(IMG_DIR, 'semi-M1-{:0>3}.png'.format(epoch)))
 
 
 #
@@ -174,8 +175,8 @@ for _ in range(n_epoch):
   for t in range(n_iter_per_epoch):
     # Get MNIST batch
     x_train, x_labels = mnist.train.next_batch(M)
-    x_train = np.random.binomial(1, x_train).astype(np.float32)
-    create_image_array(x_train).save(os.path.join(IMG_DIR, 'train.png'))
+    x_train = np.random.binomial(1, x_train)
+    create_image_array(x_train.astype(np.float32)).save(os.path.join(IMG_DIR, 'train.png'))
     # Sample latent variables for images
     zhat, muhat = sess.run((qz, mu), feed_dict={x_ph: x_train})
     # Estimate images from latent variables
@@ -186,3 +187,12 @@ for _ in range(n_epoch):
     loss += classifier.train_on_batch(zhat, x_labels)
   class_losses += [loss / n_iter_per_epoch]
   print('Epoch {}: av. loss = {}'.format(epoch, class_losses[-1]))
+#
+# Check classifier accuracy
+x_train, x_labels = mnist.train.next_batch(M)
+x_train = np.random.binomial(1, x_train)
+zhat, muhat = sess.run((qz, mu), feed_dict={x_ph: x_train})
+preds = classifier.predict(zhat)
+np.argmax(preds, axis=1) != np.argmax(x_labels, axis=1)
+num_mis = sum(np.argmax(preds, axis=1) != np.argmax(x_labels, axis=1))
+print('Proportion misclassifications: {}'.format(num_mis / M))
