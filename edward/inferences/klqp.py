@@ -11,9 +11,35 @@ from edward.util import copy
 from tensorflow.contrib import distributions as ds
 
 try:
-  from edward.models import Normal
+  from edward.models import Normal, Multinomial
 except Exception as e:
   raise ImportError("{0}. Your TensorFlow version is not supported.".format(e))
+
+_analytic_KL_dists = [Normal, Multinomial]
+# _analytic_KL_dists = [Normal]
+
+
+def _is_KL_analytic(z, qz):
+  """Are z and qz both instances of the same distribution for which
+  we have an analytic KL divergence"""
+  for dist in _analytic_KL_dists:
+    if isinstance(z, dist) and isinstance(qz, dist):
+      return True
+  return False
+
+
+def _calc_KL(qz, z):
+  """Calculate the KL divergence between z and qz."""
+  if isinstance(z, Multinomial):
+    if not isinstance(qz, Multinomial):
+      raise ValueError(
+          'Cannot calculate the KL divergence between a Multinomial '
+          'and any other distribution.')
+    tf.assert_equal(z.n, qz.n)  # Multinomials must have same number
+    # of draws to have a KL divergence
+    return tf.reduce_sum(qz.p * (qz.logits - z.logits), axis=1)
+  else:
+    return ds.kl(qz, z)
 
 
 class KLqp(VariationalInference):
@@ -114,7 +140,7 @@ class KLqp(VariationalInference):
     """
     is_reparameterizable = all([rv.is_reparameterized and rv.is_continuous
                                 for rv in six.itervalues(self.latent_vars)])
-    is_analytic_kl = all([isinstance(z, Normal) and isinstance(qz, Normal)
+    is_analytic_kl = all([_is_KL_analytic(z, qz)
                           for z, qz in six.iteritems(self.latent_vars)])
     if is_reparameterizable:
       if is_analytic_kl:
@@ -439,7 +465,7 @@ def build_reparam_kl_loss_and_gradients(inference, var_list):
   p_log_lik = tf.stack(p_log_lik)
 
   kl = tf.reduce_sum([
-      inference.kl_scaling.get(z, 1.0) * tf.reduce_sum(ds.kl(qz, z))
+      inference.kl_scaling.get(z, 1.0) * tf.reduce_sum(_calc_KL(qz, z))
       for z, qz in six.iteritems(inference.latent_vars)])
 
   loss = -(tf.reduce_mean(p_log_lik) - kl)
@@ -603,7 +629,7 @@ def build_score_kl_loss_and_gradients(inference, var_list):
   q_log_prob = tf.stack(q_log_prob)
 
   kl = tf.reduce_sum([
-      inference.kl_scaling.get(z, 1.0) * tf.reduce_sum(ds.kl(qz, z))
+      inference.kl_scaling.get(z, 1.0) * tf.reduce_sum(_calc_KL(qz, z))
       for z, qz in six.iteritems(inference.latent_vars)])
 
   loss = -(tf.reduce_mean(p_log_lik) - kl)

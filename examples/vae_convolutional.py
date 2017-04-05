@@ -12,16 +12,31 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import edward as ed
+import os, math
+from PIL import Image
 import numpy as np
-import os
 import tensorflow as tf
+import edward as ed
 
-from edward.models import Bernoulli, Normal
-from edward.util import Progbar
+from edward.models import Normal, Bernoulli, Multinomial
+# from edward.util import Progbar
 from scipy.misc import imsave
 from tensorflow.contrib import slim
 from tensorflow.examples.tutorials.mnist import input_data
+
+
+def create_image_array(imgs, rows=None, cols=None):
+  N = len(imgs)
+  if rows is None:
+    rows = int(np.sqrt(N))      # Number rows in output image
+  if cols is None:
+    cols = math.ceil(N / rows)  # Number columns in output image
+  imarray = np.zeros((rows * 28, cols * 28), dtype = imgs[0].dtype)
+  for n in range(N):
+    row = int(n / cols)
+    col = n % cols
+    imarray[row*28:(row+1)*28, col*28:(col+1)*28] = imgs[n].reshape(28, 28)
+  return Image.fromarray(255 * imarray).convert('RGB')
 
 
 def generative_network(z):
@@ -34,7 +49,7 @@ def generative_network(z):
                       activation_fn=tf.nn.elu,
                       normalizer_fn=slim.batch_norm,
                       normalizer_params={'scale': True}):
-    net = tf.reshape(z, [M, 1, 1, d])
+    net = tf.reshape(z, [M, 1, 1, D])
     net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
     net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
     net = slim.conv2d_transpose(net, 32, 5, stride=2)
@@ -59,17 +74,17 @@ def inference_network(x):
     net = slim.conv2d(net, 128, 5, padding='VALID')
     net = slim.dropout(net, 0.9)
     net = slim.flatten(net)
-    params = slim.fully_connected(net, d * 2, activation_fn=None)
+    params = slim.fully_connected(net, D * 2, activation_fn=None)
 
-  mu = params[:, :d]
-  sigma = tf.nn.softplus(params[:, d:])
+  mu = params[:, :D]
+  sigma = tf.nn.softplus(params[:, D:])
   return mu, sigma
 
 
-ed.set_seed(42)
+# ed.set_seed(42)
 
 M = 128  # batch size during training
-d = 10  # latent dimension
+D = 2  # latent dimension
 DATA_DIR = "data/mnist"
 IMG_DIR = "img"
 
@@ -82,7 +97,7 @@ if not os.path.exists(IMG_DIR):
 mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
 
 # MODEL
-z = Normal(mu=tf.zeros([M, d]), sigma=tf.ones([M, d]))
+z = Normal(mu=tf.zeros([M, D]), sigma=tf.ones([M, D]))
 logits = generative_network(z)
 x = Bernoulli(logits=logits)
 
@@ -104,12 +119,13 @@ init.run()
 
 n_epoch = 100
 n_iter_per_epoch = 1000
+n_iter_per_epoch = 100
 for epoch in range(n_epoch):
   avg_loss = 0.0
 
-  pbar = Progbar(n_iter_per_epoch)
+  # pbar = Progbar(n_iter_per_epoch)
   for t in range(1, n_iter_per_epoch + 1):
-    pbar.update(t)
+    # pbar.update(t)
     x_train, _ = mnist.train.next_batch(M)
     x_train = np.random.binomial(1, x_train)
     info_dict = inference.update(feed_dict={x_ph: x_train})
@@ -119,9 +135,9 @@ for epoch in range(n_epoch):
   # image.
   avg_loss = avg_loss / n_iter_per_epoch
   avg_loss = avg_loss / M
-  print("log p(x) >= {:0.3f}".format(avg_loss))
+  print("log p(x) >= -{:0.3f}".format(avg_loss))
 
   # Visualize hidden representations.
   imgs = hidden_rep.eval()
-  for m in range(M):
-    imsave(os.path.join(IMG_DIR, '%d.png') % m, imgs[m].reshape(28, 28))
+  create_image_array(imgs).save(
+      os.path.join(IMG_DIR, 'vae-conv-{:0>3}.png'.format(epoch)))
