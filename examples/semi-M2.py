@@ -18,6 +18,24 @@ from tensorflow.examples.tutorials.mnist import input_data
 # from keras.layers.convolutional import Conv2DTranspose, Conv2D
 from edward.models import Normal, Bernoulli, Categorical
 
+
+def expand_unlabelled(a, name):
+  """a is of shape (Ml+Mu, None). We expand a to be of shape (M, None) by
+  tiling the part of a corresponding to the unknown labels."""
+  al = a[:Ml]
+  indices = np.repeat(np.arange(Mu), K)
+  au = tf.gather(a[-Mu:], indices)
+  return tf.concat([al, au], axis=0, name=name)
+
+
+# a = np.arange(55).reshape((Ml+Mu,1))
+# a_tf = tf.constant(a)
+# a_exp_tf = expand_unlabelled(a_tf, 'a')
+# a_exp = a_exp_tf.eval(feed_dict=feed_dict)
+# a[:20]
+# a_exp[:20]
+
+
 #
 # Model M2
 # Generative semi-supervised model
@@ -25,8 +43,8 @@ from edward.models import Normal, Bernoulli, Categorical
 
 D = 2    # Number of dimensions of z
 K = 10   # Number of digits to classify
-Ml = 65  # Number of known labels in mini-batch
-Mu = 5   # Number of unknown labels in mini-batch
+Ml = 5   # Number of known labels in mini-batch
+Mu = 50  # Number of unknown labels in mini-batch
 M = Ml + K * Mu  # Mini-batch size (we need K replicates of each unlabelled datum)
 DATA_DIR = "data/mnist"
 IMG_DIR = "img"
@@ -53,21 +71,23 @@ hidden_rep = tf.sigmoid(x_logits, name='xp')
 #
 xl_ph = tf.placeholder(dtype=tf.int32, shape=[Ml, 28 * 28], name='xl')
 xu_ph = tf.placeholder(dtype=tf.int32, shape=[Mu, 28 * 28], name='xu')
-indices = np.repeat(np.arange(Mu), K)
-xu = tf.gather(xu_ph, indices, name='xu_expanded')
-xrec = tf.concat([xl_ph, xu], axis=0, name='xrec')
-mu, sigma, y_logits = inference_network(tf.cast(xrec, tf.float32), K, D, M)
-qz = Normal(mu=mu, sigma=sigma, name='qz')
+xrec = tf.concat([xl_ph, xu_ph], axis=0, name='xrec')
+mu, sigma, y_logits = inference_network(tf.cast(xrec, tf.float32), K, D)
+qz = Normal(
+    mu=expand_unlabelled(mu, 'mu'),
+    sigma=expand_unlabelled(sigma, 'sigma'),
+    name='qz')
 
 
 # Inference
 #
 inference = SemiSuperKLqp(
     K=K, Ml=Ml, Mu=Mu, y=y, y_logits=y_logits, alpha=.1*(Ml+Mu),
-    latent_vars={z: qz}, data={xgen: xrec})
+    latent_vars={z: qz}, data={xgen: expand_unlabelled(xrec, 'x_expanded')})
 optimizer = tf.train.AdamOptimizer(0.01, epsilon=1.0)
 debug = False
-inference.initialize(n_samples=3, optimizer=optimizer, debug=debug)
+n_samples = 1
+inference.initialize(n_samples=n_samples, optimizer=optimizer, debug=debug)
 sess = ed.get_session()
 init = tf.global_variables_initializer()
 init.run()
@@ -86,6 +106,7 @@ avg_losses = []
 n_epoch = 40
 n_iter_per_epoch = 1000
 n_epoch = 40
+n_epoch = 4
 n_iter_per_epoch = 100
 for _ in range(n_epoch):
   epoch = len(avg_losses)
@@ -108,9 +129,10 @@ for _ in range(n_epoch):
     total_loss += info_dict['loss']
 
   # Check misclassification rate on known labels
-  true_labels = np.argmax(yl_ph.eval(feed_dict), axis=1)
+  known_labels = np.argmax(yl_ph.eval(feed_dict), axis=1)
+  unknown_labels = (yu_train * np.arange(K)).sum(axis=1)
   pred_labels = np.argmax(inference.y_probs.eval(feed_dict), axis=1)
-  misclassrate = np.mean(true_labels != pred_labels[:Ml])
+  misclassrate = np.mean(known_labels != pred_labels[:Ml])
   misclassrate
 
   # Print a lower bound to the average marginal likelihood for an

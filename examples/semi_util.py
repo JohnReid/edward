@@ -47,13 +47,13 @@ def generative_network(y, z, K, D, M):
   return net
 
 
-def inference_network(x, K, D, M):
+def inference_network(x, K, D):
   """Inference network to parameterize variational model. It takes
   data as input and outputs the variational parameters.
 
   mu, sigma, y_logits = neural_network(x)
   """
-  net = tf.reshape(x, [M, 28, 28, 1])
+  net = tf.reshape(x, [-1, 28, 28, 1])
   with slim.arg_scope([slim.conv2d, slim.fully_connected],
                       activation_fn=tf.nn.elu,
                       normalizer_fn=slim.batch_norm,
@@ -69,7 +69,6 @@ def inference_network(x, K, D, M):
   sigma = tf.nn.softplus(output[:, D:-K])
   y_logits = output[:, -K:]
   return mu, sigma, y_logits
-
 
 
 def tf_entropy(probs):
@@ -127,10 +126,10 @@ class SemiSuperKLqp(ed.KLqp):
         tf.stack(self.p_log_lik), axis=0, name='p_log_lik')
 
     # Calculate the KL divergences between q(z|x) and p(z)
-    # TODO: add for loop over all z, qz pairs
     self.kl = tf.stack([
         self.kl_scaling.get(z, 1.0) * ed.inferences.klqp._calc_KL(qz, z)
         for z, qz in six.iteritems(self.latent_vars)])
+    # sum over latent z dimensions and qz distributions
     self.kl = tf.reduce_sum(self.kl, axis=(0, 2), name='kl')
     # print(self.kl)
 
@@ -142,24 +141,25 @@ class SemiSuperKLqp(ed.KLqp):
     # Entropy of q(z|x) for unlabelled data
     self.y_probs = tf.nn.softmax(self.y_logits, name='y_probs')
     # print(self.y_probs)
-    self.H_qy = tf_entropy(self.y_probs[self.Ml:,:])
+    self.H_qy = tf_entropy(self.y_probs[self.Ml:])
     self.H_qy = tf.identity(self.H_qy, name='H_qy')
     # print(self.H_qy)
 
     # Contribution to loss from unlabelled data
-    self.indices = np.tile(np.arange(self.K), self.Mu)
+    self.m = np.repeat(np.arange(self.Mu), self.K)
+    self.k = np.tile(np.arange(self.K), self.Mu)
     self.U = tf.reduce_sum([
-        self.y_probs[self.Ml + i, j] * (self.L[self.Ml + i] - self.H_qy[i])
-        for i, j in enumerate(self.indices)
-    ])
+        self.y_probs[self.Ml + m, k] * self.L[self.Ml + i]
+        for i, (m, k) in enumerate(zip(self.m, self.k))
+    ]) - tf.reduce_sum(self.H_qy)
 
-    # Loss
+    # Calculate J and Jalpha
     self.J = tf.reduce_sum(self.L[:self.Ml]) + self.U
     alpha_term = - self.alpha * tf.reduce_mean(self.y[:self.Ml] * tf.log(self.y_probs[:self.Ml]))
     self.Jalpha = self.J + alpha_term
 
     # Calculate gradients
-    grads = tf.gradients(self.Jalpha, [v._ref() for v in var_list])
+    loss = self.Jalpha
+    grads = tf.gradients(loss, [v._ref() for v in var_list])
     grads_and_vars = list(zip(grads, var_list))
-
-    return self.Jalpha, grads_and_vars
+    return loss, grads_and_vars
