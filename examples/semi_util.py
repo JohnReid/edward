@@ -13,6 +13,20 @@ from edward.models import RandomVariable
 from edward.util import copy
 
 
+def tf_repeat(a, times):
+  """Similar to np.repeat with axis=0."""
+  indices = np.repeat(np.arange(a.shape[0].value), times)
+  return tf.gather(a, indices)
+
+
+# a = np.arange(3)
+# a_tf = tf.constant(a)
+# a_rep_tf = tf_repeat(a_tf, 2)
+# sess_test = tf.Session()
+# a_rep = sess_test.run(a_rep_tf)
+# a_rep
+
+
 def create_image_array(imgs, rows=None, cols=None):
   N = len(imgs)
   if rows is None:
@@ -86,6 +100,10 @@ class SemiSuperKLqp(ed.KLqp):
     self.y = y
     self.y_logits = y_logits
     self.alpha = alpha
+    # Indices into unlabelled data structures
+    self.m = self.Ml + np.repeat(np.arange(self.Mu), self.K)
+    self.k = np.tile(np.arange(self.K), self.Mu)
+    self.mk = self.Ml + np.arange(self.Mu * self.K)
 
   def build_loss_and_gradients(self, var_list):
     "Adapted from edward.inferences.klqp.build_reparam_kl_loss_and_gradients"
@@ -120,42 +138,41 @@ class SemiSuperKLqp(ed.KLqp):
           log_probs = self.scale.get(x, 1.0) * x_copy.log_prob(dict_swap[x])
           self.p_log_lik[s] += tf.reduce_mean(log_probs, axis=1)
 
-    # Stack the list of log likeihoods for each iteration into one tensor
+    # Stack the list of log likelihoods for each iteration into one tensor
     # and average across samples
     self.p_log_lik = tf.reduce_mean(
         tf.stack(self.p_log_lik), axis=0, name='p_log_lik')
 
     # Calculate the KL divergences between q(z|x) and p(z)
-    self.kl = tf.stack([
-        self.kl_scaling.get(z, 1.0) * ed.inferences.klqp._calc_KL(qz, z)
-        for z, qz in six.iteritems(self.latent_vars)])
+    self.kl = tf.concat(
+        [ self.kl_scaling.get(z, 1.0) * ed.inferences.klqp._calc_KL(qz, z)
+          for z, qz in six.iteritems(self.latent_vars)],
+        axis=0)
     # sum over latent z dimensions and qz distributions
-    self.kl = tf.reduce_sum(self.kl, axis=(0, 2), name='kl')
+    self.kl = tf.reduce_sum(self.kl, axis=1, name='kl')
     # print(self.kl)
 
-    # Calculate the standard variational bound assuming we know the labels
-    self.L = -(self.p_log_lik - self.kl)
-    self.L = tf.identity(self.L, name='L')
-    # print(self.L)
+    # Calculate L for the labelled data
+    self.Ll = self.kl[:self.Ml] - self.p_log_lik[:self.Ml]
 
     # Entropy of q(z|x) for unlabelled data
-    self.y_probs = tf.nn.softmax(self.y_logits, name='y_probs')
-    # print(self.y_probs)
-    self.H_qy = tf_entropy(self.y_probs[self.Ml:])
-    self.H_qy = tf.identity(self.H_qy, name='H_qy')
-    # print(self.H_qy)
+    self.yp = tf.nn.softmax(self.y_logits, name='yp')
+    # print(self.yp)
+    self.H_qyu = tf_entropy(self.yp[self.Ml:])
+    self.H_qyu = tf.identity(self.H_qyu, name='H_qyu')
+    # print(self.H_qyu)
 
     # Contribution to loss from unlabelled data
-    self.m = np.repeat(np.arange(self.Mu), self.K)
-    self.k = np.tile(np.arange(self.K), self.Mu)
-    self.U = tf.reduce_sum([
-        self.y_probs[self.Ml + m, k] * self.L[self.Ml + i]
-        for i, (m, k) in enumerate(zip(self.m, self.k))
-    ]) - tf.reduce_sum(self.H_qy)
+    self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K))
+    self.llu = tf.reshape(self.p_log_lik[self.Ml:], (self.Mu, self.K))
+    self.Lu = self.klu - self.llu
+    self.ypu = self.yp[self.Ml:]
+    self.U = tf.reduce_sum(tf.reduce_sum(self.ypu * self.Lu, axis=1) - self.H_qyu)
 
     # Calculate J and Jalpha
-    self.J = tf.reduce_sum(self.L[:self.Ml]) + self.U
-    alpha_term = - self.alpha * tf.reduce_mean(self.y[:self.Ml] * tf.log(self.y_probs[:self.Ml]))
+    self.J = tf.reduce_sum(self.Ll) + self.U
+    # alpha term has a sum over K and average over Ml
+    alpha_term = - self.alpha * tf.reduce_mean(tf.reduce_sum(self.y[:self.Ml] * tf.log(self.yp[:self.Ml]), axis=1))
     self.Jalpha = self.J + alpha_term
 
     # Calculate gradients
