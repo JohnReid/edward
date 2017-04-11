@@ -58,17 +58,17 @@ def generative_network(z):
     return net
 
 
-def inference_network(x):
+def inference_network_slim(x):
   """Inference network to parameterize variational model. It takes
   data as input and outputs the variational parameters.
 
   mu, sigma = neural_network(x)
   """
+  net = tf.reshape(x, [M, 28, 28, 1])
   with slim.arg_scope([slim.conv2d, slim.fully_connected],
                       activation_fn=tf.nn.elu,
                       normalizer_fn=slim.batch_norm,
                       normalizer_params={'scale': True}):
-    net = tf.reshape(x, [M, 28, 28, 1])
     net = slim.conv2d(net, 32, 5, stride=2)
     net = slim.conv2d(net, 64, 5, stride=2)
     net = slim.conv2d(net, 128, 5, padding='VALID')
@@ -76,6 +76,37 @@ def inference_network(x):
     net = slim.flatten(net)
     params = slim.fully_connected(net, D * 2, activation_fn=None)
 
+  mu = params[:, :D]
+  sigma = tf.nn.softplus(params[:, D:])
+  return mu, sigma
+
+
+def inference_network(x):
+  """Inference network to parameterize variational model. It takes
+  data as input and outputs the variational parameters.
+
+  mu, sigma = neural_network(x)
+  """
+  from keras.models import Sequential
+  from keras.layers.core import Dropout, Flatten, Activation, Dense
+  from keras.layers.convolutional import Conv2D
+  from keras.layers.normalization import BatchNormalization
+  net = Sequential([
+      Conv2D( 32, 5, padding='same', strides=2, input_shape=(28, 28, 1), use_bias=False),
+      # BatchNormalization(),
+      Activation('elu'),
+      Conv2D( 64, 5, padding='same', strides=2, use_bias=False),
+      # BatchNormalization(),
+      Activation('elu'),
+      Conv2D(128, 5, padding='valid', use_bias=False),
+      # BatchNormalization(),
+      Activation('elu'),
+      Dropout(.1),
+      Flatten(),
+      Dense(D * 2),
+    ])
+
+  params = net(tf.reshape(x, [M, 28, 28, 1]))
   mu = params[:, :D]
   sigma = tf.nn.softplus(params[:, D:])
   return mu, sigma
@@ -117,7 +148,7 @@ hidden_rep = tf.sigmoid(logits)
 init = tf.global_variables_initializer()
 init.run()
 
-n_epoch = 100
+n_epoch = 25
 n_iter_per_epoch = 1000
 n_iter_per_epoch = 100
 for epoch in range(n_epoch):
