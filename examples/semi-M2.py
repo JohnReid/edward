@@ -103,8 +103,14 @@ xp = tf.sigmoid(x_logits, name='xp')
 x_ph = tf.placeholder(dtype=tf.int32, shape=[Ml+Mu, 28 * 28], name='x_ph')
 mu, sigma, y_logits = inference_network(tf.cast(x_ph, tf.float32), K, D)
 qz = Normal(mu=mu, sigma=sigma, name='qz')
-y_labels = tf.placeholder(dtype=tf.float32, shape=(Ml+Mu,K), name='y_labels')
-y_pred_loss = tf.nn.softmax_cross_entropy_with_logits(logits=y_logits, labels=y_labels, name='y_pred_loss')
+
+#
+# For validation
+#
+with tf.name_scope('valid'):
+  yp = tf.nn.softmax(y_logits, name='yp')
+  y_labels = tf.placeholder(dtype=tf.float32, shape=(Ml+Mu,K), name='y_labels')
+  y_pred_loss = tf.nn.softmax_cross_entropy_with_logits(logits=y_logits, labels=y_labels, name='y_pred_loss')
 
 
 #
@@ -156,7 +162,7 @@ for _ in range(n_epochs):
   known_labels = np.argmax(yl_ph.eval(feed_dict), axis=1)
   unknown_labels = (yu_train * np.arange(K)).sum(axis=1)
   pred_labels = np.argmax(inference.yp.eval(feed_dict), axis=1)
-  misclassrate = np.mean(unknown_labels != pred_labels[Ml:])
+  misclassrate_known = np.mean(unknown_labels != pred_labels[Ml:])
 
   # Evaluate entropy of y predictions on unknown data
   H_qyu = inference.H_qyu.eval(feed_dict)
@@ -168,8 +174,9 @@ for _ in range(n_epochs):
   avg_loss = total_loss / nbatches / (Ml + Mu)
   avg_train_losses += [avg_loss]
 
-  # Calculate the loss on the validation set
+  # Calculate the loss and misclassification rate on the validation set
   valid_loss = 0.0
+  misclassified = 0
   for x_valid_soft, y_valid in \
       zip(chunked(mnist.validation.images, Ml + Mu),
           chunked(mnist.validation.labels, Ml + Mu)):
@@ -180,10 +187,20 @@ for _ in range(n_epochs):
     if nvalid < Ml + Mu:
       x_valid.resize((Ml+Mu, x_valid.shape[1]))
       y_valid.resize((Ml+Mu, K))
-    loss = sess.run(y_pred_loss, {x_ph: x_train, y_labels: y_valid})
-    valid_loss += loss[:nvalid].sum()
+    probs, loss = sess.run([yp, y_pred_loss], {x_ph: x_train, y_labels: y_valid})
+    # Resize if needed
+    probs = probs[:nvalid]
+    loss = loss[:nvalid]
+    # Cross entropy loss
+    valid_loss += loss.sum()
+    # Mis-classification rate
+    pred_labels = np.argmax(probs, axis=1)
+    valid_labels = (y_valid[:nvalid].astype(np.int32) * np.arange(K)).sum(axis=1)
+    misclassified += (valid_labels != pred_labels).sum()
   avg_valid_loss = valid_loss / mnist.validation.num_examples
   avg_valid_losses += [avg_valid_loss]
+  misclassrate = misclassified / mnist.validation.num_examples
+  misclassrate
 
   # Print some statistics
   print(
