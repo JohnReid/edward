@@ -142,8 +142,8 @@ else:
 #
 avg_train_losses = []
 avg_valid_losses = []
-n_epochs = 40
-nbatches = 1000  # Don't use all batches
+n_epochs = 1000
+# nbatches = 1000  # Don't use all batches
 for _ in range(n_epochs):
   epoch = len(avg_train_losses)
   total_loss = 0.0
@@ -184,10 +184,10 @@ for _ in range(n_epochs):
     y_valid = np.asarray(y_valid)  # Convert from list
     nvalid = len(x_valid)  # Number of validation examples in this chunk
     # If chunk is smaller than recognition network input, we must pad it
-    if nvalid < Ml + Mu:
-      x_valid.resize((Ml+Mu, x_valid.shape[1]))
-      y_valid.resize((Ml+Mu, K))
-    probs, loss = sess.run([yp, y_pred_loss], {x_ph: x_train, y_labels: y_valid})
+    x_valid.resize((Ml+Mu, x_valid.shape[1])),
+    y_valid.resize((Ml+Mu, K))
+    feed_dict = {x_ph: x_valid, y_labels: y_valid}
+    probs, loss = sess.run([yp, y_pred_loss], feed_dict=feed_dict)
     # Resize if needed
     probs = probs[:nvalid]
     loss = loss[:nvalid]
