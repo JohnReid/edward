@@ -1,4 +1,5 @@
 import os, math, six
+from more_itertools import chunked
 from PIL import Image
 import matplotlib as mpl
 mpl.use('cairo')
@@ -11,6 +12,37 @@ from tensorflow.contrib import slim
 import edward as ed
 from edward.models import RandomVariable
 from edward.util import copy
+
+
+def ckpt_path(model, epoch):
+  "File path to store model checkpoint."
+  return os.path.join('models', '{}-{:0>3}.ckpt'.format(model, epoch))
+
+
+def choose_labelled(ds, tochoose, K):
+  # Calculate how many of each digit to pick
+  if tochoose % K:
+    raise ValueError('tochoose not a multiple of K')
+  perdigit = tochoose // K  # integer division
+  # Choose correct number of each digit
+  idxs_l = np.empty((0,), dtype=np.int32)  # Labelled indexes
+  idxs_u = np.empty((0,), dtype=np.int32)  # Unlabelled indexes
+  for k in range(K):  # for each digit
+    idxs = np.argwhere(ds.labels[:,k])[:,0]
+    np.random.shuffle(idxs)  # permute
+    idxs_l = np.concatenate([idxs_l, idxs[:perdigit]])
+    idxs_u = np.concatenate([idxs_u, idxs[perdigit:]])
+  # Shuffle to mix up digits
+  np.random.shuffle(idxs_l)  # permute
+  np.random.shuffle(idxs_u)  # permute
+  # Check we have correct number of indexes
+  assert idxs_l.shape[0] == tochoose
+  assert idxs_u.shape[0] == ds.num_examples - tochoose
+  # Check we have all indexes
+  assert all(np.unique(np.concatenate([idxs_l, idxs_u])) == range(ds.num_examples))
+  # Check there is no overlap between labelled and unlabelled
+  assert len(set(idxs_u).intersection(set(idxs_l))) == 0
+  return idxs_l, idxs_u
 
 
 def tf_repeat(a, times):
@@ -112,7 +144,7 @@ class SemiSuperKLqp(ed.KLqp):
       tf.assert_equal(tf.shape(x)[0], self.M)
 
     # For each x and each sample, calculate log p(x|z)
-    self.p_log_lik = [tf.zeros(self.M)] * self.n_samples
+    self.xll = [tf.zeros(self.M)] * self.n_samples
     for s in range(self.n_samples):
       # Form dictionary in order to replace conditioning on prior or
       # observed variable with conditioning on a specific value.
@@ -136,12 +168,14 @@ class SemiSuperKLqp(ed.KLqp):
         if isinstance(x, RandomVariable):
           x_copy = copy(x, dict_swap, scope=scope)
           log_probs = self.scale.get(x, 1.0) * x_copy.log_prob(dict_swap[x])
-          self.p_log_lik[s] += tf.reduce_mean(log_probs, axis=1)
+          self.xll[s] += tf.reduce_mean(log_probs, axis=1)
 
     # Stack the list of log likelihoods for each iteration into one tensor
     # and average across samples
-    self.p_log_lik = tf.reduce_mean(
-        tf.stack(self.p_log_lik), axis=0, name='p_log_lik')
+    self.xll = tf.reduce_mean(
+        tf.stack(self.xll), axis=0, name='xll')
+    self.xpl = self.xll[:self.Ml]
+    self.xpu = tf.reshape(self.xll[self.Ml:], (self.Mu, self.K))
 
     # Calculate the KL divergences between q(z|x) and p(z)
     self.kl = tf.concat(
@@ -150,29 +184,31 @@ class SemiSuperKLqp(ed.KLqp):
         axis=0)
     # sum over latent z dimensions and qz distributions
     self.kl = tf.reduce_sum(self.kl, axis=1, name='kl')
-    # print(self.kl)
+    self.kll = self.kl[:self.Ml]
+    # repeat into shape (Mu, K) as q(z|x) is the same for each y
+    self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K))
 
-    # Calculate L for the labelled data
-    self.Ll = self.kl[:self.Ml] - self.p_log_lik[:self.Ml]
+    # Calculate L for the labelled and unlabelled data
+    self.Ll = self.kll - self.xpl
+    self.Lu = self.klu - self.xpu
+
+    # y probabilities from recognition model
+    self.yp = tf.nn.softmax(self.y_logits, name='yp')
+    self.ypl = self.yp[:self.Ml]
+    self.ypu = self.yp[self.Ml:]
 
     # Entropy of q(z|x) for unlabelled data
-    self.yp = tf.nn.softmax(self.y_logits, name='yp')
-    # print(self.yp)
-    self.H_qyu = tf_entropy(self.yp[self.Ml:])
+    self.H_qyu = tf_entropy(self.ypu)
     self.H_qyu = tf.identity(self.H_qyu, name='H_qyu')
-    # print(self.H_qyu)
 
     # Contribution to loss from unlabelled data
-    self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K))
-    self.llu = tf.reshape(self.p_log_lik[self.Ml:], (self.Mu, self.K))
-    self.Lu = self.klu - self.llu
-    self.ypu = self.yp[self.Ml:]
-    self.U = tf.reduce_sum(tf.reduce_sum(self.ypu * self.Lu, axis=1) - self.H_qyu)
+    self.U = tf.reduce_sum(self.ypu * self.Lu, axis=1) - self.H_qyu
 
     # Calculate J and Jalpha
-    self.J = tf.reduce_sum(self.Ll) + self.U
+    self.J = tf.reduce_sum(self.Ll) + tf.reduce_sum(self.U)
     # alpha term has a sum over K and average over Ml
-    alpha_term = - self.alpha * tf.reduce_mean(tf.reduce_sum(self.y[:self.Ml] * tf.log(self.yp[:self.Ml]), axis=1))
+    log_term = - tf.reduce_sum(self.y[:self.Ml] * tf.log(self.ypl), axis=1)
+    alpha_term = self.alpha * tf.reduce_mean(log_term, axis=0)
     self.Jalpha = self.J + alpha_term
 
     # Calculate gradients
