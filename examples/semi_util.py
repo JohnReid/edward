@@ -144,38 +144,37 @@ class SemiSuperKLqp(ed.KLqp):
       tf.assert_equal(tf.shape(x)[0], self.M)
 
     # For each x and each sample, calculate log p(x|z)
-    self.xll = [tf.zeros(self.M)] * self.n_samples
+    self.xp = [tf.zeros(self.M)] * self.n_samples
     for s in range(self.n_samples):
       # Form dictionary in order to replace conditioning on prior or
       # observed variable with conditioning on a specific value.
       scope = 'inference_' + str(id(self)) + '/' + str(s)
-      dict_swap = {}
+      self.dict_swap = {}
       for x, qx in six.iteritems(self.data):
         if isinstance(x, RandomVariable):
           if isinstance(qx, RandomVariable):
             qx_copy = copy(qx, scope=scope)
-            dict_swap[x] = qx_copy.value()
+            self.dict_swap[x] = qx_copy.value()
           else:
-            dict_swap[x] = qx
+            self.dict_swap[x] = qx
 
       for z, qz in six.iteritems(self.latent_vars):
         # Copy q(z) to obtain new set of posterior samples.
         qz_copy = copy(qz, scope=scope)
-        dict_swap[z] = qz_copy.value()
+        self.dict_swap[z] = qz_copy.value()
 
       # Sum the log likelihood of each datum
       for x in six.iterkeys(self.data):
         if isinstance(x, RandomVariable):
-          x_copy = copy(x, dict_swap, scope=scope)
-          log_probs = self.scale.get(x, 1.0) * x_copy.log_prob(dict_swap[x])
-          self.xll[s] += tf.reduce_mean(log_probs, axis=1)
+          x_copy = copy(x, self.dict_swap, scope=scope)
+          log_probs = self.scale.get(x, 1.0) * x_copy.log_prob(self.dict_swap[x])
+          self.xp[s] += tf.reduce_sum(log_probs, axis=1)
 
     # Stack the list of log likelihoods for each iteration into one tensor
     # and average across samples
-    self.xll = tf.reduce_mean(
-        tf.stack(self.xll), axis=0, name='xll')
-    self.xpl = self.xll[:self.Ml]
-    self.xpu = tf.reshape(self.xll[self.Ml:], (self.Mu, self.K))
+    self.xp = tf.reduce_mean(tf.stack(self.xp), axis=0, name='xp')
+    self.xpl = self.xp[:self.Ml]
+    self.xpu = tf.reshape(self.xp[self.Ml:], (self.Mu, self.K))
 
     # Calculate the KL divergences between q(z|x) and p(z)
     self.kl = tf.concat(

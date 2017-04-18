@@ -117,9 +117,11 @@ with tf.name_scope('valid'):
 # Inference
 #
 x_rep = repeat_unlabelled(x_ph, 'x_rep')
+inf_data = {x: x_rep}
+inf_latent = {z: qz}
 inference = SemiSuperKLqp(
     K=K, Ml=Ml, Mu=Mu, y=y, y_logits=y_logits, alpha=.1*(Ml+Mu),
-    latent_vars={z: qz}, data={x: x_rep})
+    latent_vars=inf_latent, data=inf_data)
 optimizer = tf.train.AdamOptimizer(0.01, epsilon=1.0)
 debug = False
 n_samples = 1
@@ -143,7 +145,7 @@ else:
 avg_train_losses = []
 avg_valid_losses = []
 n_epochs = 1000
-# nbatches = 1000  # Don't use all batches
+# nbatches = 100  # Don't use all batches
 for _ in range(n_epochs):
   epoch = len(avg_train_losses)
   total_loss = 0.0
@@ -209,7 +211,7 @@ for _ in range(n_epochs):
       "avg valid loss = {:0.3f}; "
       "misclass = {:0.3f}; "
       "avg H_qyu = {:0.3f}; "
-      "avg KL[q(z|x) || p(z)] = {:0.1e}".format(
+      "avg KL[q(z|x) || p(z)] = {:0.3f}".format(
         epoch, avg_loss, avg_valid_loss, misclassrate, H_qyu.mean(), klmean))
 
   # Interpolate between 2 random points in latent z-space and plot one digit for each
