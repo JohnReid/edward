@@ -122,28 +122,64 @@ inf_latent = {z: qz}
 inference = SemiSuperKLqp(
     K=K, Ml=Ml, Mu=Mu, y=y, y_logits=y_logits, alpha=.1*(Ml+Mu),
     latent_vars=inf_latent, data=inf_data)
-optimizer = tf.train.AdamOptimizer(0.01, epsilon=1.0)
+with tf.name_scope('optimizer'):
+  if True:
+    learning_rate = tf.Variable(0.1, trainable=False, name="learning_rate")
+    epsilon = tf.Variable(1., trainable=False, name="epsilon")
+    tf.summary.scalar('learning_rate', learning_rate)
+    tf.summary.scalar('epsilon', epsilon)
+    # Use Adam with fixed learning rate
+    # optimizer = tf.train.AdamOptimizer(0.1, epsilon=1.0)
+    # optimizer = tf.train.AdamOptimizer()
+    # optimizer = tf.train.AdamOptimizer(.1)
+    optimizer = tf.train.AdamOptimizer(learning_rate, epsilon=epsilon)
+  else:
+    # Use ADAM with a decaying scale factor.
+    with tf.name_scope('optimizer'):
+      global_step = tf.Variable(0, trainable=False, name="global_step")
+      starter_learning_rate = .01
+      learning_rate = tf.train.exponential_decay(starter_learning_rate,
+                                                global_step,
+                                                1000, 0.96, staircase=True,
+                                                name='learning_rate')
+      tf.summary.scalar('learning_rate', learning_rate)
+      optimizer = tf.train.AdamOptimizer(learning_rate)
 debug = False
 n_samples = 1
-inference.initialize(n_samples=n_samples, optimizer=optimizer, debug=debug)
+time_tag = current_time_tag()
+logdir = os.path.join('logs', time_tag)
+os.makedirs(logdir)
+inference.initialize(n_samples=n_samples, optimizer=optimizer, debug=debug, logdir=logdir)
+inference.summarize = tf.summary.merge_all()
 # Add ops to save and restore all the variables.
 saver = tf.train.Saver()
 # Create session
 sess = ed.get_session()
 # Restore variables if we know the epoch otherwise initialise them
+# epoch = 38
 if 'epoch' in locals():
-  saver.restore(sess, ckpt_path('semi-M2', epoch=epoch))
+  model_path = ckpt_path('semi-M2', epoch=epoch)
+  print('Loading model from {}'.format(model_path))
+  saver.restore(sess, model_path)
+  avg_train_losses = [130.] * (epoch + 1)
+  avg_valid_losses = [2.]   * (epoch + 1)
 else:
   init = tf.global_variables_initializer()
   init.run()
+  avg_train_losses = []
+  avg_valid_losses = []
 
+
+
+#
+# Check for NaNs
+#
+tf.add_check_numerics_ops()
 
 
 #
 # Train
 #
-avg_train_losses = []
-avg_valid_losses = []
 n_epochs = 1000
 # nbatches = 100  # Don't use all batches
 for _ in range(n_epochs):

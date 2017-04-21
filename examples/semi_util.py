@@ -1,3 +1,4 @@
+from time import gmtime, strftime
 import os, math, six
 from more_itertools import chunked
 from PIL import Image
@@ -12,6 +13,25 @@ from tensorflow.contrib import slim
 import edward as ed
 from edward.models import RandomVariable
 from edward.util import copy
+
+
+def current_time_tag():
+  "Current time as tag suitable for filename."
+  return strftime("%Y-%m-%d_%H-%M-%S", gmtime())
+
+def variable_summaries(var, name):
+  """Attach a lot of summaries to a Tensor (for TensorBoard visualization).
+
+  See https://www.tensorflow.org/get_started/summaries_and_tensorboard"""
+  with tf.name_scope(name):
+    mean = tf.reduce_mean(var)
+    tf.summary.scalar('mean', mean)
+    with tf.name_scope('stddev'):
+      stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+    tf.summary.scalar('stddev', stddev)
+    tf.summary.scalar('max', tf.reduce_max(var))
+    tf.summary.scalar('min', tf.reduce_min(var))
+    tf.summary.histogram('histogram', var)
 
 
 def ckpt_path(model, epoch):
@@ -79,17 +99,18 @@ def generative_network(y, z, K, D, M):
 
   logits = neural_network(z)
   """
-  yz = tf.concat([y, z], axis=1)
-  net = tf.reshape(yz, [M, 1, 1, K+D])
-  with slim.arg_scope([slim.conv2d_transpose],
-                      activation_fn=tf.nn.elu,
-                      normalizer_fn=slim.batch_norm,
-                      normalizer_params={'scale': True}):
-    net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
-    net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
-    net = slim.conv2d_transpose(net, 32, 5, stride=2)
-    net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
-    net = slim.flatten(net)
+  with tf.name_scope('generative'):
+    yz = tf.concat([y, z], axis=1)
+    net = tf.reshape(yz, [M, 1, 1, K+D])
+    with slim.arg_scope([slim.conv2d_transpose],
+                        activation_fn=tf.nn.elu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
+      net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
+      net = slim.conv2d_transpose(net, 32, 5, stride=2)
+      net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
+      net = slim.flatten(net)
   return net
 
 
@@ -99,21 +120,22 @@ def inference_network(x, K, D):
 
   mu, sigma, y_logits = neural_network(x)
   """
-  net = tf.reshape(x, [-1, 28, 28, 1])
-  with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                      activation_fn=tf.nn.elu,
-                      normalizer_fn=slim.batch_norm,
-                      normalizer_params={'scale': True}):
-    net = slim.conv2d(net, 32, 5, stride=2)
-    net = slim.conv2d(net, 64, 5, stride=2)
-    net = slim.conv2d(net, 128, 5, padding='VALID')
-    net = slim.dropout(net, 0.9)
-    net = slim.flatten(net)
-    output = slim.fully_connected(net, D * 2 + K, activation_fn=None)
+  with tf.name_scope('inference'):
+    net = tf.reshape(x, [-1, 28, 28, 1])
+    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                        activation_fn=tf.nn.elu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = slim.conv2d(net, 32, 5, stride=2)
+      net = slim.conv2d(net, 64, 5, stride=2)
+      net = slim.conv2d(net, 128, 5, padding='VALID')
+      net = slim.dropout(net, 0.9)
+      net = slim.flatten(net)
+      output = slim.fully_connected(net, D * 2 + K, activation_fn=None)
 
-  mu = output[:, :D]
-  sigma = tf.nn.softplus(output[:, D:-K])
-  y_logits = output[:, -K:]
+    mu = output[:, :D]
+    sigma = tf.nn.softplus(output[:, D:-K])
+    y_logits = output[:, -K:]
   return mu, sigma, y_logits
 
 
@@ -144,74 +166,88 @@ class SemiSuperKLqp(ed.KLqp):
       tf.assert_equal(tf.shape(x)[0], self.M)
 
     # For each x and each sample, calculate log p(x|z)
-    self.xp = [tf.zeros(self.M)] * self.n_samples
-    for s in range(self.n_samples):
-      # Form dictionary in order to replace conditioning on prior or
-      # observed variable with conditioning on a specific value.
-      scope = 'inference_' + str(id(self)) + '/' + str(s)
-      self.dict_swap = {}
-      for x, qx in six.iteritems(self.data):
-        if isinstance(x, RandomVariable):
-          if isinstance(qx, RandomVariable):
-            qx_copy = copy(qx, scope=scope)
-            self.dict_swap[x] = qx_copy.value()
-          else:
-            self.dict_swap[x] = qx
+    with tf.name_scope('xp'):
+      self.xp = [tf.zeros(self.M)] * self.n_samples
+      for s in range(self.n_samples):
+        # Form dictionary in order to replace conditioning on prior or
+        # observed variable with conditioning on a specific value.
+        scope = 'inference_' + str(id(self)) + '/' + str(s)
+        self.dict_swap = {}
+        for x, qx in six.iteritems(self.data):
+          if isinstance(x, RandomVariable):
+            if isinstance(qx, RandomVariable):
+              qx_copy = copy(qx, scope=scope)
+              self.dict_swap[x] = qx_copy.value()
+            else:
+              self.dict_swap[x] = qx
 
-      for z, qz in six.iteritems(self.latent_vars):
-        # Copy q(z) to obtain new set of posterior samples.
-        qz_copy = copy(qz, scope=scope)
-        self.dict_swap[z] = qz_copy.value()
+        for z, qz in six.iteritems(self.latent_vars):
+          # Copy q(z) to obtain new set of posterior samples.
+          qz_copy = copy(qz, scope=scope)
+          self.dict_swap[z] = qz_copy.value()
 
-      # Sum the log likelihood of each datum
-      for x in six.iterkeys(self.data):
-        if isinstance(x, RandomVariable):
-          x_copy = copy(x, self.dict_swap, scope=scope)
-          log_probs = self.scale.get(x, 1.0) * x_copy.log_prob(self.dict_swap[x])
-          self.xp[s] += tf.reduce_sum(log_probs, axis=1)
+        # Sum the log likelihood of each datum
+        for x in six.iterkeys(self.data):
+          if isinstance(x, RandomVariable):
+            x_copy = copy(x, self.dict_swap, scope=scope)
+            log_probs = self.scale.get(x, 1.0) * x_copy.log_prob(self.dict_swap[x])
+            self.xp[s] += tf.reduce_sum(log_probs, axis=1)
 
-    # Stack the list of log likelihoods for each iteration into one tensor
-    # and average across samples
-    self.xp = tf.reduce_mean(tf.stack(self.xp), axis=0, name='xp')
-    self.xpl = self.xp[:self.Ml]
-    self.xpu = tf.reshape(self.xp[self.Ml:], (self.Mu, self.K))
+      # Stack the list of log likelihoods for each iteration into one tensor
+      # and average across samples
+      self.xp = tf.reduce_mean(tf.stack(self.xp), axis=0, name='xp')
+      self.xpl = self.xp[:self.Ml]
+      self.xpu = tf.reshape(self.xp[self.Ml:], (self.Mu, self.K))
 
     # Calculate the KL divergences between q(z|x) and p(z)
-    self.kl = tf.concat(
-        [ self.kl_scaling.get(z, 1.0) * ed.inferences.klqp._calc_KL(qz, z)
-          for z, qz in six.iteritems(self.latent_vars)],
-        axis=0)
-    # sum over latent z dimensions and qz distributions
-    self.kl = tf.reduce_sum(self.kl, axis=1, name='kl')
-    self.kll = self.kl[:self.Ml]
-    # repeat into shape (Mu, K) as q(z|x) is the same for each y
-    self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K))
+    with tf.name_scope('KL'):
+      self.kl = tf.concat(
+          [ self.kl_scaling.get(z, 1.0) * ed.inferences.klqp._calc_KL(qz, z)
+            for z, qz in six.iteritems(self.latent_vars)],
+          axis=0)
+      # sum over latent z dimensions and qz distributions
+      self.kl = tf.reduce_sum(self.kl, axis=1, name='kl')
+      self.kll = self.kl[:self.Ml]
+      # repeat into shape (Mu, K) as q(z|x) is the same for each y
+      self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K))
 
     # Calculate L for the labelled and unlabelled data
     self.Ll = self.kll - self.xpl
     self.Lu = self.klu - self.xpu
 
     # y probabilities from recognition model
-    self.yp = tf.nn.softmax(self.y_logits, name='yp')
-    self.ypl = self.yp[:self.Ml]
-    self.ypu = self.yp[self.Ml:]
+    with tf.name_scope('yp'):
+      self.yp = tf.nn.softmax(self.y_logits, name='yp')
+      self.ypl = self.yp[:self.Ml]
+      self.ypu = self.yp[self.Ml:]
 
     # Entropy of q(z|x) for unlabelled data
-    self.H_qyu = tf_entropy(self.ypu)
-    self.H_qyu = tf.identity(self.H_qyu, name='H_qyu')
+    with tf.name_scope('H_qyu'):
+      self.H_qyu = tf_entropy(self.ypu)
+      self.H_qyu = tf.identity(self.H_qyu, name='H_qyu')
 
     # Contribution to loss from unlabelled data
     self.U = tf.reduce_sum(self.ypu * self.Lu, axis=1) - self.H_qyu
 
     # Calculate J and Jalpha
-    self.J = tf.reduce_sum(self.Ll) + tf.reduce_sum(self.U)
-    # alpha term has a sum over K and average over Ml
-    log_term = - tf.reduce_sum(self.y[:self.Ml] * tf.log(self.ypl), axis=1)
-    alpha_term = self.alpha * tf.reduce_mean(log_term, axis=0)
-    self.Jalpha = self.J + alpha_term
+    with tf.name_scope('J'):
+      self.J = tf.reduce_sum(self.Ll) + tf.reduce_sum(self.U)
+      # alpha term has a sum over K and average over Ml
+      log_term = - tf.reduce_sum(self.y[:self.Ml] * tf.log(self.ypl), axis=1)
+      alpha_term = self.alpha * tf.reduce_mean(log_term, axis=0)
+      self.Jalpha = self.J + alpha_term
 
     # Calculate gradients
     loss = self.Jalpha
     grads = tf.gradients(loss, [v._ref() for v in var_list])
     grads_and_vars = list(zip(grads, var_list))
+
+    # Add summaries
+    with tf.name_scope('loss'):
+      tf.summary.scalar('H_qyu', tf.reduce_mean(self.H_qyu))
+      tf.summary.scalar('KL', tf.reduce_mean(self.kl))
+      tf.summary.scalar('U', tf.reduce_sum(self.U))
+      tf.summary.scalar('J', self.J)
+      tf.summary.scalar('Jalpha', self.Jalpha)
+
     return loss, grads_and_vars
