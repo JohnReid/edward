@@ -123,7 +123,11 @@ inference = SemiSuperKLqp(
     K=K, Ml=Ml, Mu=Mu, y=y, y_logits=y_logits, alpha=.1*(Ml+Mu),
     latent_vars=inf_latent, data=inf_data)
 with tf.name_scope('optimizer'):
-  if True:
+  # The total number of examples we have processed
+  total_examples = tf.Variable(0, trainable=False, name="total_examples")
+  increment_total_examples_op = tf.assign(total_examples, total_examples+Ml+Mu)
+  use_adam = False
+  if use_adam:
     learning_rate = tf.Variable(0.1, trainable=False, name="learning_rate")
     epsilon = tf.Variable(1., trainable=False, name="epsilon")
     tf.summary.scalar('learning_rate', learning_rate)
@@ -134,20 +138,22 @@ with tf.name_scope('optimizer'):
     # optimizer = tf.train.AdamOptimizer(.1)
     optimizer = tf.train.AdamOptimizer(learning_rate, epsilon=epsilon)
   else:
-    # Use ADAM with a decaying scale factor.
-    with tf.name_scope('optimizer'):
-      global_step = tf.Variable(0, trainable=False, name="global_step")
-      starter_learning_rate = .01
-      learning_rate = tf.train.exponential_decay(starter_learning_rate,
-                                                global_step,
-                                                1000, 0.96, staircase=True,
-                                                name='learning_rate')
-      tf.summary.scalar('learning_rate', learning_rate)
-      optimizer = tf.train.AdamOptimizer(learning_rate)
+    # Use a decaying scale factor with a standard gradient descent optimizer.
+    starter_learning_rate = .001
+    learning_rate = tf.train.exponential_decay(
+        learning_rate=starter_learning_rate,
+        global_step=total_examples,
+        decay_steps=100000,
+        decay_rate=0.96,
+        staircase=False,
+        name='learning_rate')
+    tf.summary.scalar('learning_rate', learning_rate)
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
 debug = False
 n_samples = 1
 time_tag = current_time_tag()
 logdir = os.path.join('logs', time_tag)
+print('Logging to: {}'.format(logdir))
 os.makedirs(logdir)
 inference.initialize(n_samples=n_samples, optimizer=optimizer, debug=debug, logdir=logdir)
 inference.summarize = tf.summary.merge_all()
@@ -195,6 +201,8 @@ for _ in range(n_epochs):
       raise ValueError('Loss is NaN')
     # Increment total loss
     total_loss += info_dict['loss']
+    # Increment total examples for decaying learning rates
+    sess.run(increment_total_examples_op)
 
   # Check misclassification rate on known labels
   known_labels = np.argmax(yl_ph.eval(feed_dict), axis=1)
