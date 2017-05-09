@@ -20,6 +20,52 @@ from tensorflow.examples.tutorials.mnist import input_data
 from edward.models import Normal, Bernoulli, Categorical
 
 
+def generative_network(y, z, K, D, M):
+  """Generative network to parameterize generative model. It takes
+  latent variables as input and outputs the likelihood parameters.
+
+  logits = neural_network(z)
+  """
+  with tf.name_scope('generative'):
+    yz = tf.concat([y, z], axis=1)
+    net = tf.reshape(yz, [M, 1, 1, K+D])
+    with slim.arg_scope([slim.conv2d_transpose],
+                        activation_fn=tf.nn.elu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
+      net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
+      net = slim.conv2d_transpose(net, 32, 5, stride=2)
+      net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
+      net = slim.flatten(net)
+  return net
+
+
+def inference_network(x, K, D):
+  """Inference network to parameterize variational model. It takes
+  data as input and outputs the variational parameters.
+
+  mu, sigma, y_logits = neural_network(x)
+  """
+  with tf.name_scope('inference'):
+    net = tf.reshape(x, [-1, 28, 28, 1])
+    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                        activation_fn=tf.nn.elu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = slim.conv2d(net, 32, 5, stride=2)
+      net = slim.conv2d(net, 64, 5, stride=2)
+      net = slim.conv2d(net, 128, 5, padding='VALID')
+      net = slim.dropout(net, 0.9)
+      net = slim.flatten(net)
+      output = slim.fully_connected(net, D * 2 + K, activation_fn=None)
+
+    mu = output[:, :D]
+    sigma = tf.nn.softplus(output[:, D:-K])
+    y_logits = output[:, -K:]
+  return mu, sigma, y_logits
+
+
 def repeat_unlabelled(a, name):
   """a is of shape (Ml+Mu, None). We expand a to be of shape (Ml+Mu*K, None) by
   repeating the part of a corresponding to the unknown labels."""
@@ -39,8 +85,9 @@ def repeat_unlabelled(a, name):
 #
 # DATA. MNIST batches are fed at training time.
 #
+model_tag = 'semi-M2'
 DATA_DIR = "data/mnist"
-IMG_DIR = "img"
+IMG_DIR = os.path.join("img", model_tag)
 if not os.path.exists(DATA_DIR):
   os.makedirs(DATA_DIR)
 if not os.path.exists(IMG_DIR):
@@ -151,10 +198,7 @@ with tf.name_scope('optimizer'):
     optimizer = tf.train.GradientDescentOptimizer(learning_rate)
 debug = False
 n_samples = 1
-time_tag = current_time_tag()
-logdir = os.path.join('logs', time_tag)
-print('Logging to: {}'.format(logdir))
-os.makedirs(logdir)
+logdir = get_log_dir(model_tag)
 inference.initialize(n_samples=n_samples, optimizer=optimizer, debug=debug, logdir=logdir)
 inference.summarize = tf.summary.merge_all()
 # Add ops to save and restore all the variables.
@@ -164,7 +208,7 @@ sess = ed.get_session()
 # Restore variables if we know the epoch otherwise initialise them
 # epoch = 38
 if 'epoch' in locals():
-  model_path = ckpt_path('semi-M2', epoch=epoch)
+  model_path = ckpt_path(model_tag, epoch=epoch)
   print('Loading model from {}'.format(model_path))
   saver.restore(sess, model_path)
   avg_train_losses = [130.] * (epoch + 1)
@@ -272,7 +316,7 @@ for _ in range(n_epochs):
   ysampled[np.arange(numimages), np.repeat(np.arange(K), numstyles)] = 1  # One hot encoding
   imgs = sess.run(xp, feed_dict={z_rep: zsampled, y: ysampled})[:numimages]
   create_image_array(imgs, rows=K).save(
-      os.path.join(IMG_DIR, 'semi-M2-{:0>3}.png'.format(epoch)))
+      os.path.join(IMG_DIR, '{:0>3}.png'.format(epoch)))
 
   # Plot the entropy of the y logits
   plt.figure()
@@ -281,7 +325,7 @@ for _ in range(n_epochs):
   plt.close()
 
   # Save the variables to disk.
-  save_path = saver.save(sess, ckpt_path('semi-M2', epoch))
+  save_path = saver.save(sess, ckpt_path(model_tag, epoch))
 
   # Plots of losses over epochs
   #

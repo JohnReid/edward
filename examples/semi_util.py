@@ -19,6 +19,15 @@ def current_time_tag():
   "Current time as tag suitable for filename."
   return strftime("%Y-%m-%d_%H-%M-%S", gmtime())
 
+
+def get_log_dir(tag):
+  time_tag = current_time_tag()
+  logdir = os.path.join('logs', tag, time_tag)
+  print('Logging to: {}'.format(logdir))
+  os.makedirs(logdir)
+  return logdir
+
+
 def variable_summaries(var, name):
   """Attach a lot of summaries to a Tensor (for TensorBoard visualization).
 
@@ -34,9 +43,9 @@ def variable_summaries(var, name):
     tf.summary.histogram('histogram', var)
 
 
-def ckpt_path(model, epoch):
+def ckpt_file(model, epoch):
   "File path to store model checkpoint."
-  return os.path.join('models', '{}-{:0>3}.ckpt'.format(model, epoch))
+  return '{}-{:0>3}.ckpt'.format(model, epoch)
 
 
 def choose_labelled(ds, tochoose, K):
@@ -91,52 +100,6 @@ def create_image_array(imgs, rows=None, cols=None):
     col = n % cols
     imarray[row*28:(row+1)*28, col*28:(col+1)*28] = imgs[n].reshape(28, 28)
   return Image.fromarray(255 * imarray).convert('RGB')
-
-
-def generative_network(y, z, K, D, M):
-  """Generative network to parameterize generative model. It takes
-  latent variables as input and outputs the likelihood parameters.
-
-  logits = neural_network(z)
-  """
-  with tf.name_scope('generative'):
-    yz = tf.concat([y, z], axis=1)
-    net = tf.reshape(yz, [M, 1, 1, K+D])
-    with slim.arg_scope([slim.conv2d_transpose],
-                        activation_fn=tf.nn.elu,
-                        normalizer_fn=slim.batch_norm,
-                        normalizer_params={'scale': True}):
-      net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
-      net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
-      net = slim.conv2d_transpose(net, 32, 5, stride=2)
-      net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
-      net = slim.flatten(net)
-  return net
-
-
-def inference_network(x, K, D):
-  """Inference network to parameterize variational model. It takes
-  data as input and outputs the variational parameters.
-
-  mu, sigma, y_logits = neural_network(x)
-  """
-  with tf.name_scope('inference'):
-    net = tf.reshape(x, [-1, 28, 28, 1])
-    with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                        activation_fn=tf.nn.elu,
-                        normalizer_fn=slim.batch_norm,
-                        normalizer_params={'scale': True}):
-      net = slim.conv2d(net, 32, 5, stride=2)
-      net = slim.conv2d(net, 64, 5, stride=2)
-      net = slim.conv2d(net, 128, 5, padding='VALID')
-      net = slim.dropout(net, 0.9)
-      net = slim.flatten(net)
-      output = slim.fully_connected(net, D * 2 + K, activation_fn=None)
-
-    mu = output[:, :D]
-    sigma = tf.nn.softplus(output[:, D:-K])
-    y_logits = output[:, -K:]
-  return mu, sigma, y_logits
 
 
 def tf_entropy(probs):

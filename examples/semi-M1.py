@@ -9,6 +9,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import semi_util, importlib
+importlib.reload(semi_util)
+from semi_util import *
 import os, math
 from PIL import Image
 import numpy as np
@@ -20,10 +23,66 @@ from keras.models import Sequential
 from keras.layers import Dense, Activation
 import edward as ed
 from edward.models import Normal, Bernoulli
+import semi_util, importlib
+importlib.reload(semi_util)
+from semi_util import *
 
 
+model_tag = 'semi-M1'
 DATA_DIR = "data/mnist"
-IMG_DIR = "img"
+IMG_DIR = os.path.join("img", model_tag)
+CKPT_DIR = os.path.join("models", model_tag)
+if not os.path.exists(DATA_DIR):
+  os.makedirs(DATA_DIR)
+if not os.path.exists(IMG_DIR):
+  os.makedirs(IMG_DIR)
+if not os.path.exists(CKPT_DIR):
+  os.makedirs(CKPT_DIR)
+
+
+def generative_network(z):
+  """Generative network to parameterize generative model. It takes
+  latent variables as input and outputs the likelihood parameters.
+
+  logits = neural_network(z)
+  """
+  with tf.name_scope('generative'):
+    with slim.arg_scope([slim.conv2d_transpose],
+                        activation_fn=tf.nn.elu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = tf.reshape(z, [M, 1, 1, d])
+      net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
+      net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
+      net = slim.conv2d_transpose(net, 32, 5, stride=2)
+      net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
+      net = slim.flatten(net)
+      return net
+
+
+def inference_network(x):
+  """Inference network to parameterize variational model. It takes
+  data as input and outputs the variational parameters.
+
+  mu, sigma = neural_network(x)
+  """
+  with tf.name_scope('inference'):
+    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                        activation_fn=tf.nn.elu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = tf.reshape(x, [M, 28, 28, 1])
+      net = slim.conv2d(net, 32, 5, stride=2)
+      net = slim.conv2d(net, 64, 5, stride=2)
+      net = slim.conv2d(net, 128, 5, padding='VALID')
+      net = slim.dropout(net, 0.9)
+      net = slim.flatten(net)
+      params = slim.fully_connected(net, d * 2, activation_fn=None)
+
+    mu = params[:, :d]
+    sigma = tf.nn.softplus(params[:, d:])
+    return mu, sigma
+
 
 # DATA. MNIST batches are fed at training time.
 mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
@@ -40,56 +99,14 @@ if not os.path.exists(IMG_DIR):
 #
 
 
-def generative_network(z):
-  """Generative network to parameterize generative model. It takes
-  latent variables as input and outputs the likelihood parameters.
-
-  logits = neural_network(z)
-  """
-  with slim.arg_scope([slim.conv2d_transpose],
-                      activation_fn=tf.nn.elu,
-                      normalizer_fn=slim.batch_norm,
-                      normalizer_params={'scale': True}):
-    net = tf.reshape(z, [M, 1, 1, d])
-    net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
-    net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
-    net = slim.conv2d_transpose(net, 32, 5, stride=2)
-    net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
-    net = slim.flatten(net)
-    return net
-
-
 # The generative model
 #
-d = 10   # Number of dimensions of z
+d = 25   # Number of dimensions of z
 M = 128  # Mini-batch size
 z = Normal(mu=tf.zeros([M, d]), sigma=tf.ones([M, d]))
 logits = generative_network(z)
 x = Bernoulli(logits=logits)
 hidden_rep = tf.sigmoid(logits)
-
-
-def inference_network(x):
-  """Inference network to parameterize variational model. It takes
-  data as input and outputs the variational parameters.
-
-  mu, sigma = neural_network(x)
-  """
-  with slim.arg_scope([slim.conv2d, slim.fully_connected],
-                      activation_fn=tf.nn.elu,
-                      normalizer_fn=slim.batch_norm,
-                      normalizer_params={'scale': True}):
-    net = tf.reshape(x, [M, 28, 28, 1])
-    net = slim.conv2d(net, 32, 5, stride=2)
-    net = slim.conv2d(net, 64, 5, stride=2)
-    net = slim.conv2d(net, 128, 5, padding='VALID')
-    net = slim.dropout(net, 0.9)
-    net = slim.flatten(net)
-    params = slim.fully_connected(net, d * 2, activation_fn=None)
-
-  mu = params[:, :d]
-  sigma = tf.nn.softplus(params[:, d:])
-  return mu, sigma
 
 # Recognition model
 #
@@ -105,31 +122,22 @@ qz = Normal(mu=mu, sigma=sigma)
 data = {x: x_ph}
 inference = ed.KLqp({z: qz}, data)
 optimizer = tf.train.AdamOptimizer(0.01, epsilon=1.0)
-inference.initialize(optimizer=optimizer)
+logdir = get_log_dir(model_tag)
+inference.initialize(optimizer=optimizer, logdir=logdir)
 
+# Add ops to save and restore all the variables.
+saver = tf.train.Saver()
+
+# Create session
 sess = ed.get_session()
 init = tf.global_variables_initializer()
 init.run()
-
-def create_image_array(imgs, rows=None, cols=None):
-  N = len(imgs)
-  if rows is None:
-    rows = int(np.sqrt(N))      # Number rows in output image
-  if cols is None:
-    cols = math.ceil(N / rows)  # Number columns in output image
-  imarray = np.zeros((rows * 28, cols * 28), dtype = imgs[0].dtype)
-  for n in range(N):
-    row = int(n / cols)
-    col = n % cols
-    imarray[row*28:(row+1)*28, col*28:(col+1)*28] = imgs[n].reshape(28, 28)
-  return Image.fromarray(255 * imarray).convert('RGB')
 
 #
 # Train
 #
 avg_losses = []
-n_epoch = 100
-n_epoch = 20
+n_epoch = 400
 n_iter_per_epoch = 1000
 for _ in range(n_epoch):
   epoch = len(avg_losses)
@@ -141,6 +149,10 @@ for _ in range(n_epoch):
     info_dict = inference.update(feed_dict={x_ph: x_train})
     total_loss += info_dict['loss']
 
+  # Save the variables to disk.
+  ckpt_path = os.path.join(CKPT_DIR, ckpt_file(model_tag, epoch))
+  save_path = saver.save(sess, ckpt_path)
+
   # Print a lower bound to the average marginal likelihood for an
   # image.
   avg_loss = total_loss / n_iter_per_epoch / M
@@ -149,7 +161,7 @@ for _ in range(n_epoch):
 
   # Posterior predictive check.
   create_image_array(hidden_rep.eval()).save(
-    os.path.join(IMG_DIR, 'semi-M1-{:0>3}.png'.format(epoch)))
+    os.path.join(IMG_DIR, 'ppc-{:0>3}.png'.format(epoch)))
 
 
 #
