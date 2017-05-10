@@ -10,7 +10,7 @@ try:
 except Exception as e:
   raise ImportError("{0}. Your TensorFlow version is not supported.".format(e))
 
-RANDOM_VARIABLE_COLLECTION = "_random_variable_collection_"
+RANDOM_VARIABLE_COLLECTION = "random_variables"
 
 
 class RandomVariable(object):
@@ -23,6 +23,17 @@ class RandomVariable(object):
   from the random variable. This enables operations on the TensorFlow
   graph, allowing random variables to be used in conjunction with
   other TensorFlow ops.
+
+  The random variable's shape is given by
+
+  ``sample_shape + batch_shape + event_shape``,
+
+  where ``sample_shape`` is an optional argument representing the
+  dimensions of samples drawn from the distribution (default is
+  a scalar); ``batch_shape`` is the number of independent random variables
+  (determined by the shape of its parameters); and ``event_shape`` is
+  the shape of one draw from the distribution (e.g., ``Normal`` has a
+  scalar ``event_shape``; ``Dirichlet`` has a vector ``event_shape``).
 
   Notes
   -----
@@ -49,34 +60,53 @@ class RandomVariable(object):
   Examples
   --------
   >>> p = tf.constant(0.5)
-  >>> x = Bernoulli(p=p)
+  >>> x = Bernoulli(p)
   >>>
-  >>> z1 = tf.constant([[2.0, 8.0]])
-  >>> z2 = tf.constant([[1.0, 2.0]])
-  >>> x = Bernoulli(p=tf.matmul(z1, z2))
+  >>> z1 = tf.constant([[1.0, -0.8], [0.3, -1.0]])
+  >>> z2 = tf.constant([[0.9, 0.2], [2.0, -0.1]])
+  >>> x = Bernoulli(logits=tf.matmul(z1, z2))
   >>>
-  >>> mu = Normal(mu=tf.constant(0.0), sigma=tf.constant(1.0))
-  >>> x = Normal(mu=mu, sigma=tf.constant(1.0))
+  >>> mu = Normal(tf.constant(0.0), tf.constant(1.0))
+  >>> x = Normal(mu, tf.constant(1.0))
   """
   def __init__(self, *args, **kwargs):
+    """
+    Parameters
+    ----------
+    sample_shape : tf.TensorShape, optional
+      Shape of samples to draw from the random variable.
+    value : tf.Tensor, optional
+      Fixed tensor to associate with random variable. Must have shape
+      ``sample_shape + batch_shape + event_shape``.
+    collections : list, optional
+      Optional list of graph collections keys. The random variable is
+      added to these collections. Defaults to ["random_variables"].
+    *args, **kwargs
+      Passed into parent ``__init__``.
+    """
     # storing args, kwargs for easy graph copying
     self._args = args
     self._kwargs = kwargs
 
-    # need to temporarily pop value before __init__
+    # temporarily pop (then reinsert) before calling parent __init__
+    sample_shape = kwargs.pop('sample_shape', ())
     value = kwargs.pop('value', None)
+    collections = kwargs.pop('collections', [RANDOM_VARIABLE_COLLECTION])
     super(RandomVariable, self).__init__(*args, **kwargs)
+    if sample_shape != ():
+      self._kwargs['sample_shape'] = sample_shape
     if value is not None:
-      self._kwargs['value'] = value  # reinsert (needed for copying)
+      self._kwargs['value'] = value
+    if collections != [RANDOM_VARIABLE_COLLECTION]:
+      self._kwargs['collections'] = collections
 
-    tf.add_to_collection(RANDOM_VARIABLE_COLLECTION, self)
-
+    self._sample_shape = tf.TensorShape(sample_shape)
     if value is not None:
       t_value = tf.convert_to_tensor(value, self.dtype)
       value_shape = t_value.shape
-      expected_shape = self.get_batch_shape().concatenate(
-          self.get_event_shape())
-      if value_shape != expected_shape:
+      expected_shape = self._sample_shape.concatenate(
+          self.batch_shape).concatenate(self.event_shape)
+      if not value_shape.is_compatible_with(expected_shape):
         raise ValueError(
             "Incompatible shape for initialization argument 'value'. "
             "Expected %s, got %s." % (expected_shape, value_shape))
@@ -84,21 +114,38 @@ class RandomVariable(object):
         self._value = t_value
     else:
       try:
-        self._value = self.sample()
+        self._value = self.sample(self._sample_shape)
       except NotImplementedError:
         raise NotImplementedError(
             "sample is not implemented for {0}. You must either pass in the "
             "value argument or implement sample for {0}."
             .format(self.__class__.__name__))
 
+    with tf.name_scope(self.name) as ns:
+      self._unique_name = ns
+
+    for collection in collections:
+      tf.add_to_collection(collection, self)
+
+  @property
+  def sample_shape(self):
+    """Sample shape of random variable."""
+    return self._sample_shape
+
   @property
   def shape(self):
     """Shape of random variable."""
     return self._value.shape
 
+  @property
+  def unique_name(self):
+    """Name of random variable with its unique scoping name. Use
+    ``name`` to just get the name of the random variable."""
+    return self._unique_name
+
   def __str__(self):
     return "RandomVariable(\"%s\"%s%s%s)" % (
-        self.name,
+        self.unique_name,
         (", shape=%s" % self.shape)
         if self.shape.ndims is not None else "",
         (", dtype=%s" % self.dtype.name) if self.dtype else "",
@@ -106,7 +153,7 @@ class RandomVariable(object):
 
   def __repr__(self):
     return "<ed.RandomVariable '%s' shape=%s dtype=%s>" % (
-        self.name, self.shape, self.dtype.name)
+        self.unique_name, self.shape, self.dtype.name)
 
   def __add__(self, other):
     return tf.add(self, other)
@@ -262,6 +309,11 @@ class RandomVariable(object):
     from edward.util.random_variables import get_ancestors
     return get_ancestors(self, collection)
 
+  def get_blanket(self, collection=None):
+    """Get the random variable's Markov blanket."""
+    from edward.util.random_variables import get_blanket
+    return get_blanket(self, collection)
+
   def get_children(self, collection=None):
     """Get child random variables."""
     from edward.util.random_variables import get_children
@@ -305,13 +357,11 @@ class RandomVariable(object):
 
   @staticmethod
   def _tensor_conversion_function(v, dtype=None, name=None, as_ref=False):
-    _ = name
+    _ = name, as_ref
     if dtype and not dtype.is_compatible_with(v.dtype):
       raise ValueError(
           "Incompatible type conversion requested to type '%s' for variable "
           "of type '%s'" % (dtype.name, v.dtype.name))
-    if as_ref:
-      raise ValueError("%s: Ref type is not supported." % v)
     return v.value()
 
 
