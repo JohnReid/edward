@@ -17,6 +17,7 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
+tf.__version__
 from tensorflow.contrib import slim
 from tensorflow.examples.tutorials.mnist import input_data
 from keras.models import Sequential
