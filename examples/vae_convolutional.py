@@ -58,11 +58,11 @@ def generative_network(z):
     return net
 
 
-def inference_network_slim(x):
+def inference_network(x):
   """Inference network to parameterize variational model. It takes
   data as input and outputs the variational parameters.
 
-  mu, sigma = neural_network(x)
+  loc, scale = neural_network(x)
   """
   net = tf.reshape(x, [M, 28, 28, 1])
   with slim.arg_scope([slim.conv2d, slim.fully_connected],
@@ -81,7 +81,7 @@ def inference_network_slim(x):
   return mu, sigma
 
 
-def inference_network(x):
+def inference_network_keras(x):
   """Inference network to parameterize variational model. It takes
   data as input and outputs the variational parameters.
 
@@ -128,14 +128,14 @@ if not os.path.exists(IMG_DIR):
 mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
 
 # MODEL
-z = Normal(mu=tf.zeros([M, D]), sigma=tf.ones([M, D]))
+z = Normal(loc=tf.zeros([M, d]), scale=tf.ones([M, d]))
 logits = generative_network(z)
 x = Bernoulli(logits=logits)
 
 # INFERENCE
 x_ph = tf.placeholder(tf.int32, [M, 28 * 28])
-mu, sigma = inference_network(tf.cast(x_ph, tf.float32))
-qz = Normal(mu=mu, sigma=sigma)
+loc, scale = inference_network(tf.cast(x_ph, tf.float32))
+qz = Normal(loc=loc, scale=scale)
 
 # Bind p(x, z) and q(z | x) to the same placeholder for x.
 data = {x: x_ph}
