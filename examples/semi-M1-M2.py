@@ -13,32 +13,30 @@ from numpy import linalg as LA
 import semi_util, importlib
 importlib.reload(semi_util)
 from semi_util import *
-# from keras.models import Sequential
-# from keras.layers import Dense, Activation, Flatten, Dropout
-# from keras.layers.convolutional import Conv2DTranspose, Conv2D
 from edward.models import Normal, Bernoulli, Categorical
-from tensorflow.examples.tutorials.mnist import input_data
 
 
-def generative_network(y, z, K, D, M):
+def generative_network(y, z, P):
   """Generative network to parameterize generative model. It takes
   latent variables as input and outputs the likelihood parameters.
 
-  logits = neural_network(z)
+  mu, sigma = neural_network(z)
   """
   with tf.name_scope('generative'):
-    yz = tf.concat([y, z], axis=1)
-    net = tf.reshape(yz, [M, 1, 1, K+D])
-    with slim.arg_scope([slim.conv2d_transpose],
+    net = tf.concat([y, z], axis=1, name='yz')
+    with slim.arg_scope([slim.fully_connected],
                         activation_fn=tf.nn.elu,
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'scale': True}):
-      net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
-      net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
-      net = slim.conv2d_transpose(net, 32, 5, stride=2)
-      net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
-      net = slim.flatten(net)
-  return net
+      net = slim.fully_connected(net, 500)
+      net = slim.dropout(net, 0.9)
+      net = slim.fully_connected(net, P * 2, activation_fn=None)  # mu & sigma for each of P dimensions
+
+    # mu = 20 * tf.nn.sigmoid(net[:, :P]) - 10
+    mu = net[:, :P]
+    sigma = tf.exp(net[:, P:] / 2)
+
+  return mu, sigma
 
 
 def inference_network(x, K, D):
@@ -48,29 +46,26 @@ def inference_network(x, K, D):
   mu, sigma, y_logits = neural_network(x)
   """
   with tf.name_scope('inference'):
-    net = tf.reshape(x, [-1, 28, 28, 1])
-    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+    with slim.arg_scope([slim.fully_connected],
                         activation_fn=tf.nn.elu,
                         normalizer_fn=slim.batch_norm,
                         normalizer_params={'scale': True}):
-      net = slim.conv2d(net, 32, 5, stride=2)
-      net = slim.conv2d(net, 64, 5, stride=2)
-      net = slim.conv2d(net, 128, 5, padding='VALID')
-      net = slim.dropout(net, 0.9)
+      net = slim.fully_connected(x, 500)
       net = slim.flatten(net)
-      output = slim.fully_connected(net, D * 2 + K, activation_fn=None)
+      net = slim.fully_connected(net, D * 2 + K, activation_fn=None)
 
-    mu = output[:, :D]
-    sigma = tf.nn.softplus(output[:, D:-K])
-    y_logits = output[:, -K:]
+    mu = net[:, :D]
+    sigma = tf.nn.softplus(net[:, D:-K])
+    y_logits = net[:, -K:]
   return mu, sigma, y_logits
 
 
 #
-# DATA. MNIST batches are fed at training time.
+# DATA
 #
-model_tag = 'semi-M2'
-DATA_DIR = "data/mnist"
+model_tag = 'semi-M1-M2'
+DATA_DIR = "data/mnist/dummy"
+# DATA_DIR = "data/mnist"
 IMG_DIR = os.path.join("img", model_tag)
 CKPT_DIR = os.path.join("models", model_tag)
 if not os.path.exists(DATA_DIR):
@@ -79,31 +74,63 @@ if not os.path.exists(IMG_DIR):
   os.makedirs(IMG_DIR)
 if not os.path.exists(CKPT_DIR):
   os.makedirs(CKPT_DIR)
-# train_z = load_mapped_dataset(DATA_DIR, 'train')
-# train_images = train_z['z']
-# train_labels = train_z['y']
-# validation_z = load_mapped_dataset(DATA_DIR, 'validation')
-# validation_images = validation_z['z']
-# validation_labels = validation_z['y']
-mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
-train_images = mnist.train.images
-train_labels = mnist.train.labels
-validation_images = mnist.validation.images
-validation_labels = mnist.validation.labels
+train = load_mapped_dataset(DATA_DIR, 'train')
+trainloc = train['zloc']
+trainscale = train['zscale']
+trainlabels = train['y']
+valid = load_mapped_dataset(DATA_DIR, 'validation')
+validloc = valid['zloc']
+validscale = valid['zscale']
+validlabels = valid['y']
+P = trainloc.shape[-1]  # Dimensionality of data
+print('Input dimensionality = {}'.format(P))
 K = 10   # Number of digits to classify
-nlabelled = 3000
-nbatches = 1000
-batches, Ml, Mu = make_batches(nbatches, nlabelled, train_images, train_labels, K)
+nlabelled = 300
+nbatches = 100
+idx_l, idx_u, Ml, Mu = choose_labelled(trainlabels, nlabelled, K, nbatches)
 
+
+# 1/0
+import seaborn as sns
+import pandas as pd
+sns.set_style('whitegrid')
+unhotlabels = np.dot(trainlabels, np.arange(K)).astype('int')
+# d = 0
+# df = pd.DataFrame({
+#   'x': trainloc[:,d],
+#   'y': unhotlabels})
+# plt.figure()
+# df['x'].hist(by=df['y'], alpha=0.5)
+# plt.savefig('trainloc-d{}.png'.format(d))
+# plt.close('all')
+# plt.figure()
+# sns.kdeplot(trainloc.flatten(), bw=0.5)
+# plt.savefig('trainloc.png')
+# plt.figure()
+# sns.kdeplot(np.log(trainscale).flatten(), bw=0.5)
+# plt.savefig('trainscale.png')
+def summarise(data, fn):
+  df = pd.DataFrame(data)
+  df['y'] = unhotlabels
+  stats = df.groupby('y').apply(lambda g: fn(g.as_matrix(), axis=0))
+  stats = np.asarray([s for s in stats])
+  return stats
+means = summarise(trainloc, np.mean)
+means
+stds = summarise(trainloc, np.std)
+stds
+1/0
 
 #
 # Model M2
 # Generative semi-supervised model
 #
 
-D = 2    # Number of dimensions of z
+D = 50    # Number of dimensions of z
+print('Using {} latent dimensions for z'.format(D))
 M = Ml + K * Mu  # Mini-batch size for generative network,
                  # we need K replicates of each unlabelled datum in order to marginalise
+                 # over digits
 
 
 #
@@ -116,18 +143,17 @@ z_rep = repeat_unlabelled(z, Ml, Mu, K, 'z_rep')
 yu = tf.one_hot(tf.tile(tf.range(K, dtype=tf.int32), (Mu,)), K, name='yu')  # Use one-hot encoding
 yl_ph = tf.placeholder(dtype=yu.dtype, shape=(Ml,K), name='yl')  # The known labels
 y = tf.concat([yl_ph, yu], axis=0, name='y')
-# Define the generative network and the Bernoulli likelihood
-x_logits = generative_network(y, z_rep, K, D, M)
-x = Bernoulli(logits=x_logits, name='x')
-xp = tf.sigmoid(x_logits, name='xp')
+# Define the generative network and the Gaussian likelihood
+x_mu, x_sigma = generative_network(y, z_rep, P)
+x = Normal(loc=x_mu, scale=x_sigma, name='x')
 
 
 #
 # Recognition model
 #
-x_ph = tf.placeholder(dtype=tf.int32, shape=[Ml+Mu, 28 * 28], name='x_ph')
-mu, sigma, y_logits = inference_network(tf.cast(x_ph, tf.float32), K, D)
-qz = Normal(loc=mu, scale=sigma, name='qz')
+x_ph = tf.placeholder(dtype=x.dtype, shape=[Ml+Mu, P], name='x_ph')
+qz_mu, qz_sigma, y_logits = inference_network(tf.cast(x_ph, tf.float32), K, D)
+qz = Normal(loc=qz_mu, scale=qz_sigma, name='qz')
 
 
 #
@@ -152,9 +178,12 @@ with tf.name_scope('optimizer'):
   # The total number of examples we have processed
   total_examples = tf.Variable(0, trainable=False, name="total_examples")
   increment_total_examples_op = tf.assign(total_examples, total_examples+Ml+Mu)
-  use_adam = False
+  use_adam = True
   if use_adam:
-    learning_rate = tf.Variable(0.1, trainable=False, name="learning_rate")
+    learning_rate = tf.Variable(3e-4, trainable=False, name="learning_rate")
+    # Define an operation we can execute to reduce the learning rate
+    learning_rate_scale = .1
+    reduce_learning_rate = tf.assign(learning_rate, learning_rate*learning_rate_scale)
     epsilon = tf.Variable(1., trainable=False, name="epsilon")
     tf.summary.scalar('learning_rate', learning_rate)
     tf.summary.scalar('epsilon', epsilon)
@@ -165,7 +194,7 @@ with tf.name_scope('optimizer'):
     optimizer = tf.train.AdamOptimizer(learning_rate, epsilon=epsilon)
   else:
     # Use a decaying scale factor with a standard gradient descent optimizer.
-    starter_learning_rate = .001
+    starter_learning_rate = .0000001
     learning_rate = tf.train.exponential_decay(
         learning_rate=starter_learning_rate,
         global_step=total_examples,
@@ -209,19 +238,27 @@ tf.add_check_numerics_ops()
 #
 # Train
 #
-n_epochs = 1000
+n_epochs = 500
 # nbatches = 100  # Don't use all batches
 for _ in range(n_epochs):
   epoch = len(avg_train_losses)
   total_loss = 0.0
 
+  #
+  # Generate some samples from the mean and standard deviation for z
+  #
+  batches = make_batches_from_M1(trainloc, trainscale, trainlabels, idx_l, idx_u, Ml, Mu)
   for b in range(nbatches):
-    xl_train_soft, yl_train, xu_train_soft, yu_train = batches[b]
-    x_train = np.random.binomial(1, np.concatenate([xl_train_soft, xu_train_soft]))
-    feed_dict = {x_ph: x_train, yl_ph: yl_train}
+    xl_train, yl_train, xu_train, yu_train = batches[b]
+    feed_dict = {x_ph: np.concatenate([xl_train, xu_train]), yl_ph: yl_train}
     info_dict = inference.update(feed_dict=feed_dict)
+    # print('Min x_sigma={}'.format(x_sigma.eval(feed_dict).min()))
     if math.isnan(info_dict['loss']):
       raise ValueError('Loss is NaN')
+      model_path = os.path.join(CKPT_DIR, ckpt_file(model_tag, max(0, epoch - 2)))
+      print('Loss is NaN, restoring from checkpoint: {}'.format(model_path))
+      saver.restore(sess, model_path)
+      sess.run(reduce_learning_rate)
     # Increment total loss
     total_loss += info_dict['loss']
     # Increment total examples for decaying learning rates
@@ -246,17 +283,15 @@ for _ in range(n_epochs):
   # Calculate the loss and misclassification rate on the validation set
   valid_loss = 0.0
   misclassified = 0
-  for x_valid_soft, y_valid in \
-      zip(chunked(validation_images, Ml + Mu),
-          chunked(validation_labels, Ml + Mu)):
-    x_valid = np.random.binomial(1, x_valid_soft)
-    y_valid = np.asarray(y_valid)  # Convert from list
+  for x_valid, y_valid in \
+      zip(map(np.asarray, chunked(validloc, Ml + Mu)),
+          map(np.asarray, chunked(validlabels, Ml + Mu))):
     nvalid = len(x_valid)  # Number of validation examples in this chunk
     # If chunk is smaller than recognition network input, we must pad it
-    x_valid.resize((Ml+Mu, x_valid.shape[1])),
-    y_valid.resize((Ml+Mu, K))
-    feed_dict = {x_ph: x_valid, y_labels: y_valid}
-    probs, loss = sess.run([yp, y_pred_loss], feed_dict=feed_dict)
+    x_valid = np.resize(x_valid, (Ml+Mu, x_valid.shape[1]))
+    y_valid = np.resize(y_valid, (Ml+Mu, K))
+    feed_dict_2 = {x_ph: x_valid, y_labels: y_valid}
+    probs, loss = sess.run([yp, y_pred_loss], feed_dict=feed_dict_2)
     # Resize if needed
     probs = probs[:nvalid]
     loss = loss[:nvalid]
@@ -266,11 +301,16 @@ for _ in range(n_epochs):
     pred_labels = np.argmax(probs, axis=1)
     valid_labels = (y_valid[:nvalid].astype(np.int32) * np.arange(K)).sum(axis=1)
     misclassified += (valid_labels != pred_labels).sum()
-  valid_examples = validation_labels.shape[0]
+  valid_examples = validlabels.shape[0]
   avg_valid_loss = valid_loss / valid_examples
   avg_valid_losses += [avg_valid_loss]
   misclassrate = misclassified / valid_examples
   misclassrate
+  summary = tf.Summary(value=[
+    tf.Summary.Value(tag="validation/misclassrate", simple_value=misclassrate),
+    tf.Summary.Value(tag="validation/avg_valid_loss", simple_value=avg_valid_loss),
+  ])
+  inference.train_writer.add_summary(summary, epoch)
 
   # Print some statistics
   print(
@@ -281,22 +321,6 @@ for _ in range(n_epochs):
       "avg H_qyu = {:0.3f}; "
       "avg KL[q(z|x) || p(z)] = {:0.3f}".format(
         epoch, avg_loss, avg_valid_loss, misclassrate, H_qyu.mean(), klmean))
-
-  # Interpolate between 2 random points in latent z-space and plot one digit for each
-  ysampled = np.zeros((M, K))
-  zsampled = np.zeros((M, D))
-  numstyles = int(M / K)
-  numimages = numstyles * K
-  # 1 random point in z-space
-  z1 = np.random.normal(loc=0, scale=1., size=D)
-  z1 = 2 * z1 / LA.norm(z1, 2)  # Make z1 of length 2
-  # Interpolate between z1 and -z1
-  zstyles = z1 - np.linspace(0, 1, num=numstyles).reshape((numstyles ,1)) * 2 * z1.reshape((1, D))
-  zsampled[:numimages] = np.tile(zstyles, (K, 1))
-  ysampled[np.arange(numimages), np.repeat(np.arange(K), numstyles)] = 1  # One hot encoding
-  imgs = sess.run(xp, feed_dict={z_rep: zsampled, y: ysampled})[:numimages]
-  create_image_array(imgs, rows=K).save(
-      os.path.join(IMG_DIR, '{:0>3}.png'.format(epoch)))
 
   # Plot the entropy of the y logits
   plt.figure()
@@ -320,6 +344,3 @@ for _ in range(n_epochs):
   plt.plot(range(ignore_first, len(avg_train_losses)), avg_train_losses[ignore_first:])
   plt.savefig('img/avg_losses_last.png')
   plt.close()
-
-# G = tf.get_default_graph()
-# G.get_operations()

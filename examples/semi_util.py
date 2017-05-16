@@ -48,44 +48,10 @@ def ckpt_file(model, epoch):
   return '{}-{:0>3}.ckpt'.format(model, epoch)
 
 
-def choose_labelled(ds, tochoose, K):
-  # Calculate how many of each digit to pick
-  if tochoose % K:
-    raise ValueError('tochoose not a multiple of K')
-  perdigit = tochoose // K  # integer division
-  # Choose correct number of each digit
-  idxs_l = np.empty((0,), dtype=np.int32)  # Labelled indexes
-  idxs_u = np.empty((0,), dtype=np.int32)  # Unlabelled indexes
-  for k in range(K):  # for each digit
-    idxs = np.argwhere(ds.labels[:,k])[:,0]
-    np.random.shuffle(idxs)  # permute
-    idxs_l = np.concatenate([idxs_l, idxs[:perdigit]])
-    idxs_u = np.concatenate([idxs_u, idxs[perdigit:]])
-  # Shuffle to mix up digits
-  np.random.shuffle(idxs_l)  # permute
-  np.random.shuffle(idxs_u)  # permute
-  # Check we have correct number of indexes
-  assert idxs_l.shape[0] == tochoose
-  assert idxs_u.shape[0] == ds.num_examples - tochoose
-  # Check we have all indexes
-  assert all(np.unique(np.concatenate([idxs_l, idxs_u])) == range(ds.num_examples))
-  # Check there is no overlap between labelled and unlabelled
-  assert len(set(idxs_u).intersection(set(idxs_l))) == 0
-  return idxs_l, idxs_u
-
-
-def tf_repeat(a, times):
+def tf_repeat(a, times, name=None):
   """Similar to np.repeat with axis=0."""
   indices = np.repeat(np.arange(a.shape[0].value), times)
-  return tf.gather(a, indices)
-
-
-# a = np.arange(3)
-# a_tf = tf.constant(a)
-# a_rep_tf = tf_repeat(a_tf, 2)
-# sess_test = tf.Session()
-# a_rep = sess_test.run(a_rep_tf)
-# a_rep
+  return tf.gather(a, indices, name=name)
 
 
 def create_image_array(imgs, rows=None, cols=None):
@@ -172,7 +138,7 @@ class SemiSuperKLqp(ed.KLqp):
       self.kl = tf.reduce_sum(self.kl, axis=1, name='kl')
       self.kll = self.kl[:self.Ml]
       # repeat into shape (Mu, K) as q(z|x) is the same for each y
-      self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K))
+      self.klu = tf.reshape(tf_repeat(self.kl[self.Ml:], self.K), (self.Mu, self.K), name='klu')
 
     # Calculate L for the labelled and unlabelled data
     self.Ll = self.kll - self.xpl
@@ -214,3 +180,109 @@ class SemiSuperKLqp(ed.KLqp):
       tf.summary.scalar('Jalpha', self.Jalpha)
 
     return loss, grads_and_vars
+
+
+def map_images_to_latent_z(sess, x_ph, loc, scale, images):
+  M = loc.shape[0].value
+  d = loc.shape[1].value
+  N = images.shape[0]
+  zloc = np.zeros((N, d))
+  zscale = np.zeros((N, d))
+  for c, x in enumerate(chunked(images, M)):
+    n = len(x)  # Size of chunk
+    # Convert to numpy array
+    x = np.asarray(x)
+    # Resize if necessary (i.e. last chunk is shorter than M)
+    x.resize((M, 784))
+    # Evaluate recognition network and store result
+    locpad, scalepad = sess.run((loc, scale), {x_ph: x})
+    zloc[(c*M):(c*M+n),:] = locpad[:n,:]
+    zscale[(c*M):(c*M+n),:] = scalepad[:n,:]
+  return zloc, zscale
+
+
+def save_mapped_dataset(directory, sess, x_ph, loc, scale, ds, name):
+  path = os.path.join(directory, 'semi-M1-{}.npz'.format(name))
+  print('Saving mapped data to: {}'.format(path))
+  zloc, zscale = map_images_to_latent_z(sess, x_ph, loc, scale, ds.images)
+  np.savez(path, zloc=zloc, zscale=zscale, y=ds.labels)
+
+
+def load_mapped_dataset(directory, name):
+  path = os.path.join(directory, 'semi-M1-{}.npz'.format(name))
+  print('Loading mapped data from: {}'.format(path))
+  return np.load(path)
+
+
+def repeat_unlabelled(a, Ml, Mu, K, name):
+  """a is of shape (Ml+Mu, None). We expand a to be of shape (Ml+Mu*K, None) by
+  repeating the part of a corresponding to the unknown labels."""
+  tf.assert_equal(tf.shape(a)[0], Ml + Mu)
+  return tf.concat([a[:Ml], tf_repeat(a[-Mu:], K)], axis=0, name=name)
+
+
+def choose_labelled(labels, tochoose, K, nbatches):
+  num_examples = labels.shape[0]
+  # Calculate how many of each digit to pick
+  if tochoose % K:
+    raise ValueError('tochoose not a multiple of K')
+  perdigit = tochoose // K  # integer division
+  # Choose correct number of each digit
+  idx_l = np.empty((0,), dtype=np.int32)  # Labelled indexes
+  idx_u = np.empty((0,), dtype=np.int32)  # Unlabelled indexes
+  for k in range(K):  # for each digit
+    idx = np.argwhere(labels[:,k])[:,0]
+    if len(idx) < perdigit:
+      raise ValueError('Do not have enough examples of digit {}, {} < {}'.format(k, len(idx), perdigit))
+    np.random.shuffle(idx)  # permute
+    idx_l = np.concatenate([idx_l, idx[:perdigit]])
+    idx_u = np.concatenate([idx_u, idx[perdigit:]])
+  # Shuffle to mix up digits
+  np.random.shuffle(idx_l)  # permute
+  np.random.shuffle(idx_u)  # permute
+  # Check we have correct number of indexes
+  assert idx_l.shape[0] == tochoose, (idx_l.shape, tochoose)
+  assert idx_u.shape[0] == num_examples - tochoose
+  # Check we have all indexes
+  assert all(np.unique(np.concatenate([idx_l, idx_u])) == range(num_examples))
+  # Check there is no overlap between labelled and unlabelled
+  assert len(set(idx_u).intersection(set(idx_l))) == 0
+  if len(idx_l) % nbatches:
+    raise ValueError('Number of labelled examples not a multiple of nbatches')
+  if len(idx_u) % nbatches:
+    raise ValueError('Number of unlabelled examples not a multiple of nbatches')
+  Ml = len(idx_l) // nbatches
+  Mu = len(idx_u) // nbatches
+  print('Ml = {}; Mu = {}'.format(Ml, Mu))
+  assert nbatches == len(list(chunked(idx_l, Ml)))
+  assert nbatches == len(list(chunked(idx_u, Mu)))
+  return idx_l, idx_u, Ml, Mu
+
+
+def make_batches(nbatches, nlabelled, images, labels, K):
+  idx_l, idx_u, Ml, Mu = choose_labelled(labels, nlabelled, K, nbatches)
+  batches = [
+    (
+      np.asarray(images[idx_l]),
+      np.asarray(labels[idx_l]),
+      np.asarray(images[idx_u]),
+      np.asarray(labels[idx_u]),
+    )
+    for idx_l, idx_u in zip(chunked(idx_l, Ml), chunked(idx_u, Mu))
+  ]
+  assert nbatches == len(batches)
+  return batches, Ml, Mu
+
+
+def make_batches_from_M1(loc, scale, labels, idx_l, idx_u, Ml, Mu):
+  """Make batches from output from M1, i.e. a mean and standard deviation."""
+  batches = [
+    (
+      np.random.normal(loc=loc[idx_l], scale=scale[idx_l]),
+      np.asarray(labels[idx_l]),
+      np.random.normal(loc=loc[idx_u], scale=scale[idx_u]),
+      np.asarray(labels[idx_u]),
+    )
+    for idx_l, idx_u in zip(chunked(idx_l, Ml), chunked(idx_u, Mu))
+  ]
+  return batches
