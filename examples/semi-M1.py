@@ -9,11 +9,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import logging
-FORMAT = '%(asctime)-15s %(levelname)s %(message)s'
-logging.basicConfig(format=FORMAT, level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 import semi_util, importlib
 importlib.reload(semi_util)
 from semi_util import *
@@ -80,14 +75,66 @@ def inference_network(x):
       net = tf.reshape(x, [M, 28, 28, 1])
       net = slim.conv2d(net, 32, 5, stride=2)
       net = slim.conv2d(net, 64, 5, stride=2)
-      net = slim.conv2d(net, 128, 5, padding='VALID')
+      net = slim.conv2d(net, 128, 5, padding='valid')
       net = slim.dropout(net, 0.9)
       net = slim.flatten(net)
+      params = slim.fully_connected(net, d * 2, activation_fn=none)
+
+    mu = params[:, :d]
+    sigma = tf.nn.softplus(params[:, d:])
+    return mu, sigma
+
+
+def inference_network2(x):
+  """Inference network to parameterize variational model. It takes
+  data as input and outputs the variational parameters.
+
+  Inspired by https://www.tensorflow.org/get_started/mnist/pros
+
+  mu, sigma = neural_network(x)
+  """
+  with tf.name_scope('inference'):
+    with slim.arg_scope([slim.conv2d, slim.fully_connected],
+                        activation_fn=tf.nn.relu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = tf.reshape(x, [M, 28, 28, 1])
+      net = slim.conv2d(net,  32, 5)  # 1st convolutional layer
+      net = slim.max_pool2d(net, 2)
+      net = slim.conv2d(net,  64, 5)  # 2nd convolutional layer
+      net = slim.max_pool2d(net, 2)
+      net = slim.conv2d(net, 128, 3)  # 3rd convolutional layer
+      net = slim.flatten(net)
+      net = slim.fully_connected(net, 1024)
+      net = slim.dropout(net, 0.9)
       params = slim.fully_connected(net, d * 2, activation_fn=None)
 
     mu = params[:, :d]
     sigma = tf.nn.softplus(params[:, d:])
     return mu, sigma
+
+
+def generative_network2(z):
+  """Generative network to parameterize generative model. It takes
+  latent variables as input and outputs the likelihood parameters.
+
+  Inspired by https://www.tensorflow.org/get_started/mnist/pros
+
+  logits = neural_network(z)
+  """
+  with tf.name_scope('generative'):
+    with slim.arg_scope([slim.conv2d_transpose, slim.fully_connected],
+                        activation_fn=tf.nn.relu,
+                        normalizer_fn=slim.batch_norm,
+                        normalizer_params={'scale': True}):
+      net = slim.fully_connected(z, 1024)
+      net = tf.reshape(net, [M, 1, 1, -1])
+      net = slim.conv2d_transpose(net, 128, 3, padding='VALID')
+      net = slim.conv2d_transpose(net, 64, 5, padding='VALID')
+      net = slim.conv2d_transpose(net, 32, 5, stride=2)
+      net = slim.conv2d_transpose(net, 1, 5, stride=2, activation_fn=None)
+      net = slim.flatten(net)
+      return net
 
 
 # DATA. MNIST batches are fed at training time.
@@ -106,8 +153,9 @@ if not os.path.exists(IMG_DIR):
 
 
 # Dimensions
-d = 25    # Number of dimensions of z
-M = 500  # Mini-batch size
+d = 50   # Number of dimensions of z
+M = 100  # Mini-batch size
+K = 10   # Number of digits
 if mnist.train.num_examples % M:
   raise ValueError('Number of examples not a multiple of mini-batch size')
 n_batches = math.floor(mnist.train.num_examples / M)
@@ -116,7 +164,7 @@ n_batches = math.floor(mnist.train.num_examples / M)
 # The generative model
 #
 z = Normal(loc=tf.zeros([M, d]), scale=tf.ones([M, d]))
-logits = generative_network(z)
+logits = generative_network2(z)
 x = Bernoulli(logits=logits)
 hidden_rep = tf.sigmoid(logits)
 
@@ -126,7 +174,7 @@ hidden_rep = tf.sigmoid(logits)
 # Define a subgraph of the variational model, corresponding to a
 # minibatch of size M.
 x_ph = tf.placeholder(tf.int32, [M, 28 * 28])
-mu, sigma = inference_network(tf.cast(x_ph, tf.float32))
+mu, sigma = inference_network2(tf.cast(x_ph, tf.float32))
 qz = Normal(loc=mu, scale=sigma)
 
 #
@@ -183,6 +231,13 @@ for _ in range(n_epoch):
   logger.info("Epoch: {:0>3}; log p(x) >= {:0.3f}; KL(qz||z) = {:0.3f}".format(len(avg_losses), -avg_loss, avg_kl))
   avg_losses += [avg_loss]
 
+  # Log some values
+  summary = tf.Summary(value=[
+    tf.Summary.Value(tag="train/avg_loss", simple_value=avg_loss),
+    tf.Summary.Value(tag="train/avg_kl", simple_value=avg_kl),
+  ])
+  inference.train_writer.add_summary(summary, epoch)
+
   # Posterior predictive check.
   create_image_array(hidden_rep.eval()).save(
     os.path.join(IMG_DIR, 'ppc-{:0>3}.png'.format(epoch)))
@@ -198,8 +253,8 @@ for _ in range(n_epoch):
 # # Build the classifier
 # classifier = Sequential([
 #   Dense(30, input_dim=d, activation='relu'),
-#   Dense(10, activation='relu'),  # Small hidden layer
-#   Dense(10, activation='sigmoid')])  # 10 digits
+#   Dense(K, activation='relu'),  # Small hidden layer
+#   Dense(K, activation='sigmoid')])  # K digits
 # # Compile model - clip gradients to avoid NaNs
 # classifier.compile(loss='categorical_crossentropy', optimizer='rmsprop', metrics=['accuracy'], clipnorm=1.)
 # #

@@ -1,3 +1,17 @@
+"""
+Helper functions for semi-supervised learning code.
+"""
+
+
+#
+# Import and configure logging
+#
+import logging
+FORMAT = '%(asctime)-15s %(levelname)s %(message)s'
+logging.basicConfig(format=FORMAT, level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 from time import gmtime, strftime
 import os, math, six
 from more_itertools import chunked
@@ -13,6 +27,9 @@ from tensorflow.contrib import slim
 import edward as ed
 from edward.models import RandomVariable
 from edward.util import copy
+
+
+tf.logging.set_verbosity(tf.logging.INFO)
 
 
 def current_time_tag():

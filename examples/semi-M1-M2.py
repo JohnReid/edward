@@ -9,7 +9,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from numpy import linalg as LA
 import semi_util, importlib
 importlib.reload(semi_util)
 from semi_util import *
@@ -238,7 +237,7 @@ tf.add_check_numerics_ops()
 #
 # Train
 #
-n_epochs = 500
+n_epochs = 250
 # nbatches = 100  # Don't use all batches
 for _ in range(n_epochs):
   epoch = len(avg_train_losses)
