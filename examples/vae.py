@@ -35,13 +35,13 @@ M = 100  # batch size during training
 d = 2  # latent dimension
 
 # DATA. MNIST batches are fed at training time.
-mnist = input_data.read_data_sets(DATA_DIR, one_hot=True)
+mnist = input_data.read_data_sets(DATA_DIR)
 
 # MODEL
 # Define a subgraph of the full model, corresponding to a minibatch of
 # size M.
 z = Normal(loc=tf.zeros([M, d]), scale=tf.ones([M, d]))
-hidden = Dense(256, activation='relu')(z)
+hidden = Dense(256, activation='relu')(z.value())
 x = Bernoulli(logits=Dense(28 * 28)(hidden))
 
 # INFERENCE
@@ -58,8 +58,7 @@ optimizer = tf.train.RMSPropOptimizer(0.01, epsilon=1.0)
 inference.initialize(optimizer=optimizer)
 
 sess = ed.get_session()
-init = tf.global_variables_initializer()
-init.run()
+tf.global_variables_initializer().run()
 
 n_epoch = 100
 n_iter_per_epoch = 1000
