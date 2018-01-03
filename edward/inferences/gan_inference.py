@@ -10,8 +10,8 @@ from edward.util import get_session
 
 
 class GANInference(VariationalInference):
-  """Parameter estimation with GAN-style training (Goodfellow et al.,
-  2014).
+  """Parameter estimation with GAN-style training
+  [@goodfellow2014generative].
 
   Works for the class of implicit (and differentiable) probabilistic
   models. These models do not require a tractable density and assume
@@ -121,7 +121,7 @@ class GANInference(VariationalInference):
 
     if self.logging:
       tf.summary.histogram("discriminator_outputs",
-                           tf.concat(d_true, d_fake, axis=0),
+                           tf.concat([d_true, d_fake], axis=0),
                            collections=[self._summary_key])
 
     loss_d = tf.nn.sigmoid_cross_entropy_with_logits(
