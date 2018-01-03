@@ -38,6 +38,9 @@
 __pycache__/
 *.py[cod]
 
+# Ignore reqd-pkgs.txt for now
+reqd-pkgs.txt
+
 *.csv
 
 # C extensions
