@@ -30,7 +30,7 @@ class test_klqp_class(tf.test.TestCase):
         qmu = inference.latent_vars[mu]
       inference.run(*args, **kwargs)
 
-      self.assertAllClose(qmu.mean().eval(), 0, rtol=0.15, atol=0.5)
+      self.assertAllClose(qmu.mean().eval(), 0, rtol=0.1, atol=0.6)
       self.assertAllClose(qmu.stddev().eval(), np.sqrt(1 / 51),
                           rtol=0.15, atol=0.5)
 
@@ -59,6 +59,25 @@ class test_klqp_class(tf.test.TestCase):
     self._test_normal_normal(ed.KLqp, default=False, n_iter=5000)
     self._test_normal_normal(ed.KLqp, default=True, n_iter=5000)
     self._test_model_parameter(ed.KLqp, n_iter=50)
+
+  def test_klqp_nsamples_check(self):
+    with self.assertRaisesRegexp(ValueError,
+                                 "n_samples should be greater than zero: 0"):
+      self._test_normal_normal(ed.KLqp, default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ReparameterizationEntropyKLqp,
+                               default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ReparameterizationKLqp,
+                               default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ReparameterizationKLKLqp,
+                               default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ScoreEntropyKLqp,
+                               default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ScoreKLqp,
+                               default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ScoreKLKLqp,
+                               default=True, n_samples=0, n_iter=10)
+      self._test_normal_normal(ed.ScoreRBKLqp,
+                               default=True, n_samples=0, n_iter=10)
 
   def test_reparameterization_entropy_klqp(self):
     self._test_normal_normal(

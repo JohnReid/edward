@@ -46,6 +46,9 @@ class KLqp(VariationalInference):
 
   where $z^{(s)} \sim q(z; \lambda)$ and $\\beta^{(s)}
   \sim q(\\beta)$.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -85,10 +88,10 @@ class KLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
-      kl_scaling: dict of RandomVariable to tf.Tensor, optional.
+      kl_scaling: dict of RandomVariable to tf.Tensor.
         Provides option to scale terms when using ELBO with KL divergence.
         If the KL divergence terms are
 
@@ -101,6 +104,9 @@ class KLqp(VariationalInference):
     """
     if kl_scaling is None:
       kl_scaling = {}
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
 
     self.n_samples = n_samples
     self.kl_scaling = kl_scaling
@@ -164,6 +170,9 @@ class ReparameterizationKLqp(VariationalInference):
 
   This class minimizes the objective using the reparameterization
   gradient.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -203,10 +212,13 @@ class ReparameterizationKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
     """
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     return super(ReparameterizationKLqp, self).initialize(*args, **kwargs)
 
@@ -221,6 +233,9 @@ class ReparameterizationKLKLqp(VariationalInference):
 
   This class minimizes the objective using the reparameterization
   gradient and an analytic KL term.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -260,10 +275,10 @@ class ReparameterizationKLKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
-      kl_scaling: dict of RandomVariable to tf.Tensor, optional.
+      kl_scaling: dict of RandomVariable to tf.Tensor.
         Provides option to scale terms when using ELBO with KL divergence.
         If the KL divergence terms are
 
@@ -276,6 +291,9 @@ class ReparameterizationKLKLqp(VariationalInference):
     """
     if kl_scaling is None:
       kl_scaling = {}
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
 
     self.n_samples = n_samples
     self.kl_scaling = kl_scaling
@@ -292,6 +310,9 @@ class ReparameterizationEntropyKLqp(VariationalInference):
 
   This class minimizes the objective using the reparameterization
   gradient and an analytic entropy term.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -331,10 +352,13 @@ class ReparameterizationEntropyKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
     """
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     return super(ReparameterizationEntropyKLqp, self).initialize(
         *args, **kwargs)
@@ -350,6 +374,9 @@ class ScoreKLqp(VariationalInference):
 
   This class minimizes the objective using the score function
   gradient.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -389,10 +416,13 @@ class ScoreKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
     """
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     return super(ScoreKLqp, self).initialize(*args, **kwargs)
 
@@ -407,6 +437,9 @@ class ScoreKLKLqp(VariationalInference):
 
   This class minimizes the objective using the score function gradient
   and an analytic KL term.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -446,10 +479,10 @@ class ScoreKLKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
-      kl_scaling: dict of RandomVariable to tf.Tensor, optional.
+      kl_scaling: dict of RandomVariable to tf.Tensor.
         Provides option to scale terms when using ELBO with KL divergence.
         If the KL divergence terms are
 
@@ -462,7 +495,9 @@ class ScoreKLKLqp(VariationalInference):
     """
     if kl_scaling is None:
       kl_scaling = {}
-
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     self.kl_scaling = kl_scaling
     return super(ScoreKLKLqp, self).initialize(*args, **kwargs)
@@ -478,6 +513,9 @@ class ScoreEntropyKLqp(VariationalInference):
 
   This class minimizes the objective using the score function gradient
   and an analytic entropy term.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -517,10 +555,13 @@ class ScoreEntropyKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
     """
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     return super(ScoreEntropyKLqp, self).initialize(*args, **kwargs)
 
@@ -542,6 +583,9 @@ class ScoreRBKLqp(VariationalInference):
   stochastic nodes in the computation graph. It does not
   Rao-Blackwellize within a node such as when a node represents
   multiple random variables via non-scalar batch shape.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -581,10 +625,13 @@ class ScoreRBKLqp(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
     """
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     return super(ScoreRBKLqp, self).initialize(*args, **kwargs)
 
@@ -640,14 +687,17 @@ def build_reparam_loss_and_gradients(inference, var_list):
 
   p_log_prob = tf.reduce_mean(p_log_prob)
   q_log_prob = tf.reduce_mean(q_log_prob)
+  reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
 
   if inference.logging:
     tf.summary.scalar("loss/p_log_prob", p_log_prob,
                       collections=[inference._summary_key])
     tf.summary.scalar("loss/q_log_prob", q_log_prob,
                       collections=[inference._summary_key])
+    tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                      collections=[inference._summary_key])
 
-  loss = -(p_log_prob - q_log_prob)
+  loss = -(p_log_prob - q_log_prob - reg_penalty)
 
   grads = tf.gradients(loss, var_list)
   grads_and_vars = list(zip(grads, var_list))
@@ -702,13 +752,17 @@ def build_reparam_kl_loss_and_gradients(inference, var_list):
       tf.reduce_sum(inference.kl_scaling.get(z, 1.0) * kl_divergence(qz, z))
       for z, qz in six.iteritems(inference.latent_vars)])
 
+  reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
+
   if inference.logging:
     tf.summary.scalar("loss/p_log_lik", p_log_lik,
                       collections=[inference._summary_key])
     tf.summary.scalar("loss/kl_penalty", kl_penalty,
                       collections=[inference._summary_key])
+    tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                      collections=[inference._summary_key])
 
-  loss = -(p_log_lik - kl_penalty)
+  loss = -(p_log_lik - kl_penalty - reg_penalty)
 
   grads = tf.gradients(loss, var_list)
   grads_and_vars = list(zip(grads, var_list))
@@ -766,13 +820,17 @@ def build_reparam_entropy_loss_and_gradients(inference, var_list):
       tf.reduce_sum(qz.entropy())
       for z, qz in six.iteritems(inference.latent_vars)])
 
+  reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
+
   if inference.logging:
     tf.summary.scalar("loss/p_log_prob", p_log_prob,
                       collections=[inference._summary_key])
     tf.summary.scalar("loss/q_entropy", q_entropy,
                       collections=[inference._summary_key])
+    tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                      collections=[inference._summary_key])
 
-  loss = -(p_log_prob + q_entropy)
+  loss = -(p_log_prob + q_entropy - reg_penalty)
 
   grads = tf.gradients(loss, var_list)
   grads_and_vars = list(zip(grads, var_list))
@@ -823,21 +881,24 @@ def build_score_loss_and_gradients(inference, var_list):
 
   p_log_prob = tf.stack(p_log_prob)
   q_log_prob = tf.stack(q_log_prob)
+  reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
 
   if inference.logging:
     tf.summary.scalar("loss/p_log_prob", tf.reduce_mean(p_log_prob),
                       collections=[inference._summary_key])
     tf.summary.scalar("loss/q_log_prob", tf.reduce_mean(q_log_prob),
                       collections=[inference._summary_key])
+    tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                      collections=[inference._summary_key])
 
   losses = p_log_prob - q_log_prob
-  loss = -tf.reduce_mean(losses)
+  loss = -(tf.reduce_mean(losses) - reg_penalty)
 
   q_rvs = list(six.itervalues(inference.latent_vars))
   q_vars = [v for v in var_list
             if len(get_descendants(tf.convert_to_tensor(v), q_rvs)) != 0]
   q_grads = tf.gradients(
-      -tf.reduce_mean(q_log_prob * tf.stop_gradient(losses)),
+      -(tf.reduce_mean(q_log_prob * tf.stop_gradient(losses)) - reg_penalty),
       q_vars)
   p_vars = [v for v in var_list if v not in q_vars]
   p_grads = tf.gradients(loss, p_vars)
@@ -891,19 +952,24 @@ def build_score_kl_loss_and_gradients(inference, var_list):
       tf.reduce_sum(inference.kl_scaling.get(z, 1.0) * kl_divergence(qz, z))
       for z, qz in six.iteritems(inference.latent_vars)])
 
+  reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
+
   if inference.logging:
     tf.summary.scalar("loss/p_log_lik", tf.reduce_mean(p_log_lik),
                       collections=[inference._summary_key])
     tf.summary.scalar("loss/kl_penalty", kl_penalty,
                       collections=[inference._summary_key])
+    tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                      collections=[inference._summary_key])
 
-  loss = -(tf.reduce_mean(p_log_lik) - kl_penalty)
+  loss = -(tf.reduce_mean(p_log_lik) - kl_penalty - reg_penalty)
 
   q_rvs = list(six.itervalues(inference.latent_vars))
   q_vars = [v for v in var_list
             if len(get_descendants(tf.convert_to_tensor(v), q_rvs)) != 0]
   q_grads = tf.gradients(
-      -(tf.reduce_mean(q_log_prob * tf.stop_gradient(p_log_lik)) - kl_penalty),
+      -(tf.reduce_mean(q_log_prob * tf.stop_gradient(p_log_lik)) - kl_penalty -
+          reg_penalty),
       q_vars)
   p_vars = [v for v in var_list if v not in q_vars]
   p_grads = tf.gradients(loss, p_vars)
@@ -962,6 +1028,8 @@ def build_score_entropy_loss_and_gradients(inference, var_list):
       tf.reduce_sum(qz.entropy())
       for z, qz in six.iteritems(inference.latent_vars)])
 
+  reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
+
   if inference.logging:
     tf.summary.scalar("loss/p_log_prob", tf.reduce_mean(p_log_prob),
                       collections=[inference._summary_key])
@@ -969,15 +1037,17 @@ def build_score_entropy_loss_and_gradients(inference, var_list):
                       collections=[inference._summary_key])
     tf.summary.scalar("loss/q_entropy", q_entropy,
                       collections=[inference._summary_key])
+    tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                      collections=[inference._summary_key])
 
-  loss = -(tf.reduce_mean(p_log_prob) + q_entropy)
+  loss = -(tf.reduce_mean(p_log_prob) + q_entropy - reg_penalty)
 
   q_rvs = list(six.itervalues(inference.latent_vars))
   q_vars = [v for v in var_list
             if len(get_descendants(tf.convert_to_tensor(v), q_rvs)) != 0]
   q_grads = tf.gradients(
       -(tf.reduce_mean(q_log_prob * tf.stop_gradient(p_log_prob)) +
-          q_entropy),
+          q_entropy - reg_penalty),
       q_vars)
   p_vars = [v for v in var_list if v not in q_vars]
   p_grads = tf.gradients(loss, p_vars)
@@ -1062,7 +1132,8 @@ def build_score_rb_loss_and_gradients(inference, var_list):
     qi_log_prob = tf.stack(qi_log_prob)
     grad = tf.gradients(
         -tf.reduce_mean(qi_log_prob *
-                        tf.stop_gradient(pi_log_prob - qi_log_prob)),
+                        tf.stop_gradient(pi_log_prob - qi_log_prob)) +
+        tf.reduce_sum(tf.losses.get_regularization_losses()),
         var)
     grads.extend(grad)
     grads_vars.append(var)
@@ -1071,7 +1142,8 @@ def build_score_rb_loss_and_gradients(inference, var_list):
   loss = -(tf.reduce_mean([tf.reduce_sum(list(six.itervalues(p_log_prob)))
                            for p_log_prob in p_log_probs]) -
            tf.reduce_mean([tf.reduce_sum(list(six.itervalues(q_log_prob)))
-                           for q_log_prob in q_log_probs]))
+                           for q_log_prob in q_log_probs]) -
+           tf.reduce_sum(tf.losses.get_regularization_losses()))
   model_vars = [v for v in var_list if v not in grads_vars]
   model_grads = tf.gradients(loss, model_vars)
   grads.extend(model_grads)

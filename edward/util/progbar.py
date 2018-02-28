@@ -16,12 +16,12 @@ class Progbar(object):
     Args:
       target: int.
         Total number of steps expected.
-      width: int, optional.
+      width: int.
         Width of progress bar.
-      interval: float, optional.
+      interval: float.
         Minimum time (in seconds) for progress bar to be displayed
         during updates.
-      verbose: int, optional.
+      verbose: int.
         Level of verbosity. 0 suppresses output; 1 is default.
     """
     self.target = target
@@ -45,10 +45,10 @@ class Progbar(object):
     Args:
       current: int.
         Index of current step.
-      values: dict of str to float, optional.
+      values: dict of str to float.
         Dict of name by value-for-last-step. The progress bar
         will display averages for these values.
-      force: bool, optional.
+      force: bool.
         Whether to force visual progress update.
     """
     if values is None:
@@ -80,7 +80,10 @@ class Progbar(object):
     bar += ' '
     prog_width = int(self.width * float(current) / self.target)
     if prog_width > 0:
-      bar += ('█' * prog_width)
+      try:
+        bar += ('█' * prog_width)
+      except UnicodeEncodeError:
+        bar += ('*' * prog_width)
 
     bar += (' ' * (self.width - prog_width))
     sys.stdout.write(bar)

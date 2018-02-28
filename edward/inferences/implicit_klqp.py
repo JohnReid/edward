@@ -48,6 +48,9 @@ class ImplicitKLqp(GANInference):
   + If `scale` has more than one item, then in order to scale
   its corresponding output, `discriminator` must output a
   dictionary of same size and keys as `scale`.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars, data=None, discriminator=None,
                global_vars=None):
@@ -62,7 +65,7 @@ class ImplicitKLqp(GANInference):
         discriminators, it can take a batch of data points and local
         variables, of size $M$, and output a vector of length
         $M$.
-      global_vars: dict of RandomVariable to RandomVariable, optional.
+      global_vars: dict of RandomVariable to RandomVariable.
         Identifying which variables in `latent_vars` are global
         variables, shared across data points. These will not be
         encompassed in the ratio estimation problem, and will be
@@ -85,7 +88,7 @@ class ImplicitKLqp(GANInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      ratio_loss: str or fn, optional.
+      ratio_loss: str or fn.
         Loss function minimized to get the ratio estimator. 'log' or 'hinge'.
         Alternatively, one can pass in a function of two inputs,
         `psamples` and `qsamples`, and output a point-wise value
@@ -203,8 +206,14 @@ class ImplicitKLqp(GANInference):
                       for key in six.iterkeys(self.scale)]
       scaled_ratio = tf.reduce_sum(scaled_ratio)
 
+    reg_terms_d = tf.losses.get_regularization_losses(scope="Disc")
+    reg_terms_all = tf.losses.get_regularization_losses()
+    reg_terms = [r for r in reg_terms_all if r not in reg_terms_d]
+
     # Form variational objective.
-    loss = -(pbeta_log_prob - qbeta_log_prob + scaled_ratio)
+    loss = -(pbeta_log_prob - qbeta_log_prob + scaled_ratio -
+             tf.reduce_sum(reg_terms))
+    loss_d = loss_d + tf.reduce_sum(reg_terms_d)
 
     var_list_d = tf.get_collection(
         tf.GraphKeys.TRAINABLE_VARIABLES, scope="Disc")

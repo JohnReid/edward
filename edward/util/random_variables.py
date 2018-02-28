@@ -11,10 +11,11 @@ from edward.models.random_variable import RandomVariable
 from edward.models.random_variables import TransformedDistribution
 from edward.models import PointMass
 from edward.util.graphs import random_variables
-from tensorflow.contrib.distributions import bijectors
 from tensorflow.core.framework import attr_value_pb2
 from tensorflow.python.framework.ops import set_shapes_for_outputs
 from tensorflow.python.util import compat
+
+tfb = tf.contrib.distributions.bijectors
 
 
 def check_data(data):
@@ -82,6 +83,52 @@ def check_latent_vars(latent_vars):
                       "dtype: {}, {}".format(key.dtype, value.dtype))
 
 
+def _get_context_copy(ctx, scope):
+    # contexts are stored in graph collections
+    # is there a more efficient way to do this?
+
+    graph = tf.get_default_graph()
+
+    for name, collection in six.iteritems(graph._collections):
+      if ctx in collection:
+        for item in collection:
+          if item.name == scope + ctx.name:
+            return item
+
+    return None
+
+
+def _copy_context(ctx, context_matches, dict_swap, scope, copy_q):
+  if ctx is None:
+    return None
+
+  # We'd normally check about returning early, but the context won't
+  # be copied until after all children are, so we check that first.
+
+  graph = tf.get_default_graph()
+
+  # copy all nodes within context
+  for tensorname in ctx._values:
+    tensor = graph.as_graph_element(tensorname)
+    copy(tensor, dict_swap, scope, True, copy_q)
+
+  # now make sure we haven't already copied the context we're currently
+  # trying to copy (in the course of copying another child)
+  ctx_copy = _get_context_copy(ctx, scope)
+  if ctx_copy:
+    return ctx_copy
+
+  ctx_copy = ctx.from_proto(ctx.to_proto(), scope[:-1])
+  outer_copy = _copy_context(ctx.outer_context, context_matches, dict_swap,
+                             scope, copy_q)
+  ctx_copy._outer_context = outer_copy
+
+  for name, collection in six.iteritems(graph._collections):
+      if ctx in collection:
+        graph.add_to_collection(name, ctx_copy)
+  return ctx_copy
+
+
 def _copy_default(x, *args, **kwargs):
   if isinstance(x, (RandomVariable, tf.Operation, tf.Tensor, tf.Variable)):
     x = copy(x, *args, **kwargs)
@@ -106,19 +153,19 @@ def copy(org_instance, dict_swap=None, scope="copied",
   Args:
     org_instance: RandomVariable, tf.Operation, tf.Tensor, or tf.Variable.
       Node to add in graph with replaced ancestors.
-    dict_swap: dict, optional.
+    dict_swap: dict.
       Random variables, variables, tensors, or operations to swap with.
       Its keys are what `org_instance` may depend on, and its values are
       the corresponding object (not necessarily of the same class
       instance, but must have the same type, e.g., float32) that is used
       in exchange.
-    scope: str, optional.
+    scope: str.
       A scope for the new node(s). This is used to avoid name
       conflicts with the original node(s).
-    replace_itself: bool, optional
+    replace_itself: bool.
       Whether to replace `org_instance` itself if it exists in
       `dict_swap`. (This is used for the recursion.)
-    copy_q: bool, optional.
+    copy_q: bool.
       Whether to copy the replaced tensors too (if not already
       copied within the new scope). Otherwise will reuse them.
     copy_parent_rvs:
@@ -289,6 +336,13 @@ def copy(org_instance, dict_swap=None, scope="copied",
     # its operation-level seed if it has one.
     node_def = deepcopy(op.node_def)
     node_def.name = new_name
+
+    # when copying control flow contexts,
+    # we need to make sure frame definitions are copied
+    if 'frame_name' in node_def.attr and node_def.attr['frame_name'].s != b'':
+      node_def.attr['frame_name'].s = (scope.encode('utf-8') +
+                                       node_def.attr['frame_name'].s)
+
     if 'seed2' in node_def.attr and tf.get_seed(None)[1] is not None:
       node_def.attr['seed2'].i = tf.get_seed(None)[1]
 
@@ -335,6 +389,11 @@ def copy(org_instance, dict_swap=None, scope="copied",
         elem = tf.convert_to_tensor(elem)
 
       new_op._add_input(elem)
+
+    # Copy the control flow context.
+    control_flow_context = _copy_context(op._get_control_flow_context(), {},
+                                         dict_swap, scope, copy_q)
+    new_op._set_control_flow_context(control_flow_context)
 
     # Use Graph's private methods to add the op, following
     # implementation of `tf.Graph().create_op()`.
@@ -392,7 +451,7 @@ def get_ancestors(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor.
       Query node to find ancestors of.
-    collection: list of RandomVariable, optional.
+    collection: list of RandomVariable.
       The collection of random variables to check with respect to;
       defaults to all random variables in the graph.
 
@@ -444,7 +503,7 @@ def get_blanket(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor.
       Query node to find Markov blanket of.
-    collection: list of RandomVariable, optional.
+    collection: list of RandomVariable.
       The collection of random variables to check with respect to;
       defaults to all random variables in the graph.
 
@@ -480,7 +539,7 @@ def get_children(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor>
       Query node to find children of.
-    collection: list of RandomVariable, optional>
+    collection: list of RandomVariable.
       The collection of random variables to check with respect to;
       defaults to all random variables in the graph.
 
@@ -533,7 +592,7 @@ def get_descendants(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor.
       Query node to find descendants of.
-    collection: list of RandomVariable, optional.
+    collection: list of RandomVariable.
       The collection of random variables to check with respect to;
       defaults to all random variables in the graph.
 
@@ -586,7 +645,7 @@ def get_parents(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor.
       Query node to find parents of.
-    collection: list of RandomVariable, optional.
+    collection: list of RandomVariable.
       The collection of random variables to check with respect to;
       defaults to all random variables in the graph.
 
@@ -638,7 +697,7 @@ def get_siblings(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor.
       Query node to find siblings of.
-    collection: list of RandomVariable, optional.
+    collection: list of RandomVariable.
       The collection of random variables to check with respect to;
       defaults to all random variables in the graph.
 
@@ -670,7 +729,7 @@ def get_variables(x, collection=None):
   Args:
     x: RandomVariable or tf.Tensor.
       Query node to find parents of.
-    collection: list of tf.Variable, optional.
+    collection: list of tf.Variable.
       The collection of variables to check with respect to; defaults to
       all variables in the graph.
 
@@ -726,7 +785,7 @@ def is_independent(a, b, condition=None):
        Query node(s).
     b: RandomVariable or list of RandomVariable.
        Query node(s).
-    condition: RandomVariable or list of RandomVariable, optional.
+    condition: RandomVariable or list of RandomVariable.
        Random variable(s) to condition on.
 
   Returns:
@@ -808,14 +867,14 @@ def transform(x, *args, **kwargs):
   Args:
     x: RandomVariable.
       Continuous random variable to transform.
-    *args, **kwargs: optional.
-      Arguments to overwrite when forming the ``TransformedDistribution``.
+    *args, **kwargs:
+      Arguments to overwrite when forming the `TransformedDistribution`.
       For example, manually specify the transformation by passing in
-      the ``bijector`` argument.
+      the `bijector` argument.
 
   Returns:
     RandomVariable.
-    A ``TransformedDistribution`` random variable, or the provided random
+    A `TransformedDistribution` random variable, or the provided random
     variable if no transformation was applied.
 
   #### Examples
@@ -839,13 +898,13 @@ def transform(x, *args, **kwargs):
     raise AttributeError(msg)
 
   if support == '01':
-    bij = bijectors.Invert(bijectors.Sigmoid())
+    bij = tfb.Invert(tfb.Sigmoid())
     new_support = 'real'
   elif support == 'nonnegative':
-    bij = bijectors.Invert(bijectors.Softplus())
+    bij = tfb.Invert(tfb.Softplus())
     new_support = 'real'
   elif support == 'simplex':
-    bij = bijectors.Invert(bijectors.SoftmaxCentered(event_ndims=1))
+    bij = tfb.Invert(tfb.SoftmaxCentered(event_ndims=1))
     new_support = 'multivariate_real'
   elif support in ('real', 'multivariate_real'):
     return x

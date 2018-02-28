@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """A demo of how to develop new inference algorithms in Edward. Here
 we implement importance-weighted variational inference. We test it on
 logistic regression.
@@ -43,10 +42,8 @@ class IWVI(VariationalInference):
   def initialize(self, K=5, *args, **kwargs):
     """Initialization.
 
-    Parameters
-    ----------
-    K : int, optional
-      Number of importance samples.
+    Args:
+      K: int. Number of importance samples.
     """
     self.K = K
     return super(IWVI, self).initialize(*args, **kwargs)
@@ -55,10 +52,8 @@ class IWVI(VariationalInference):
     """Build loss function. Its automatic differentiation
     is a stochastic gradient of
 
-    .. math::
-
-      -E_{q(z^1; \lambda), ..., q(z^K; \lambda)} [
-      \log 1/K \sum_{k=1}^K p(x, z^k)/q(z^k; \lambda) ]
+    $-\mathbb{E}_{q(z^1; \lambda), ..., q(z^K; \lambda)} [
+      \log 1/K \sum_{k=1}^K p(x, z^k)/q(z^k; \lambda) ]$
 
     based on the reparameterization trick.
     """
@@ -96,28 +91,32 @@ class IWVI(VariationalInference):
     return loss, grads_and_vars
 
 
-ed.set_seed(42)
-N = 5000  # number of data points
-D = 10  # number of features
+def main(_):
+  ed.set_seed(42)
+  N = 5000  # number of data points
+  D = 10  # number of features
 
-# DATA
-w_true = np.random.randn(D)
-X_data = np.random.randn(N, D)
-p = expit(np.dot(X_data, w_true))
-y_data = np.array([np.random.binomial(1, i) for i in p])
+  # DATA
+  w_true = np.random.randn(D)
+  X_data = np.random.randn(N, D)
+  p = expit(np.dot(X_data, w_true))
+  y_data = np.array([np.random.binomial(1, i) for i in p])
 
-# MODEL
-X = tf.placeholder(tf.float32, [N, D])
-w = Normal(loc=tf.zeros(D), scale=tf.ones(D))
-y = Bernoulli(logits=ed.dot(X, w))
+  # MODEL
+  X = tf.placeholder(tf.float32, [N, D])
+  w = Normal(loc=tf.zeros(D), scale=tf.ones(D))
+  y = Bernoulli(logits=ed.dot(X, w))
 
-# INFERENCE
-qw = Normal(loc=tf.Variable(tf.random_normal([D])),
-            scale=tf.nn.softplus(tf.Variable(tf.random_normal([D]))))
+  # INFERENCE
+  qw = Normal(loc=tf.get_variable("qw/loc", [D]),
+              scale=tf.nn.softplus(tf.get_variable("qw/scale", [D])))
 
-inference = IWVI({w: qw}, data={X: X_data, y: y_data})
-inference.run(K=5, n_iter=1000)
+  inference = IWVI({w: qw}, data={X: X_data, y: y_data})
+  inference.run(K=5, n_iter=1000)
 
-# CRITICISM
-print("Mean squared error in true values to inferred posterior mean:")
-print(tf.reduce_mean(tf.square(w_true - qw.mean())).eval())
+  # CRITICISM
+  print("Mean squared error in true values to inferred posterior mean:")
+  print(tf.reduce_mean(tf.square(w_true - qw.mean())).eval())
+
+if __name__ == "__main__":
+  tf.app.run()

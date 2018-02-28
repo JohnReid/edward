@@ -45,6 +45,9 @@ class KLpq(VariationalInference):
 
   where $z^{(s)} \sim q(z; \lambda)$ and$\\beta^{(s)}
   \sim q(\\beta)$.
+
+  The objective function also adds to itself a summation over all
+  tensors in the `REGULARIZATION_LOSSES` collection.
   """
   def __init__(self, latent_vars=None, data=None):
     """Create an inference algorithm.
@@ -84,10 +87,13 @@ class KLpq(VariationalInference):
     and builds ops for the algorithm's computation graph.
 
     Args:
-      n_samples: int, optional.
+      n_samples: int.
         Number of samples from variational model for calculating
         stochastic gradients.
     """
+    if n_samples <= 0:
+      raise ValueError(
+          "n_samples should be greater than zero: {}".format(n_samples))
     self.n_samples = n_samples
     return super(KLpq, self).initialize(*args, **kwargs)
 
@@ -151,23 +157,26 @@ class KLpq(VariationalInference):
 
     p_log_prob = tf.stack(p_log_prob)
     q_log_prob = tf.stack(q_log_prob)
+    reg_penalty = tf.reduce_sum(tf.losses.get_regularization_losses())
 
     if self.logging:
       tf.summary.scalar("loss/p_log_prob", tf.reduce_mean(p_log_prob),
                         collections=[self._summary_key])
       tf.summary.scalar("loss/q_log_prob", tf.reduce_mean(q_log_prob),
                         collections=[self._summary_key])
+      tf.summary.scalar("loss/reg_penalty", reg_penalty,
+                        collections=[self._summary_key])
 
     log_w = p_log_prob - q_log_prob
     log_w_norm = log_w - tf.reduce_logsumexp(log_w)
     w_norm = tf.exp(log_w_norm)
-    loss = tf.reduce_sum(w_norm * log_w)
+    loss = tf.reduce_sum(w_norm * log_w) - reg_penalty
 
     q_rvs = list(six.itervalues(self.latent_vars))
     q_vars = [v for v in var_list
               if len(get_descendants(tf.convert_to_tensor(v), q_rvs)) != 0]
     q_grads = tf.gradients(
-        -tf.reduce_sum(q_log_prob * tf.stop_gradient(w_norm)),
+        -(tf.reduce_sum(q_log_prob * tf.stop_gradient(w_norm)) - reg_penalty),
         q_vars)
     p_vars = [v for v in var_list if v not in q_vars]
     p_grads = tf.gradients(-loss, p_vars)
