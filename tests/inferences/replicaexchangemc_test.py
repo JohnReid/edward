@@ -6,10 +6,10 @@ import edward as ed
 import numpy as np
 import tensorflow as tf
 
-from edward.models import Categorical, Empirical, Normal
+from edward.models import Normal, Empirical
 
 
-class test_hmc_class(tf.test.TestCase):
+class test_replicaexchangemc_class(tf.test.TestCase):
 
   def _test_normal_normal(self, default, dtype):
     with self.test_session() as sess:
@@ -24,9 +24,9 @@ class test_hmc_class(tf.test.TestCase):
       # analytic solution: N(loc=0.0, scale=\sqrt{1/51}=0.140)
       if not default:
         qmu = Empirical(params=tf.Variable(tf.ones(n_samples, dtype=dtype)))
-        inference = ed.HMC({mu: qmu}, data={x: x_data})
+        inference = ed.ReplicaExchangeMC({mu: qmu}, {mu: mu}, data={x: x_data})
       else:
-        inference = ed.HMC([mu], data={x: x_data})
+        inference = ed.ReplicaExchangeMC([mu], {mu: mu}, data={x: x_data})
         qmu = inference.latent_vars[mu]
       inference.run()
 
@@ -65,16 +65,23 @@ class test_hmc_class(tf.test.TestCase):
       b = Normal(loc=tf.zeros(1, dtype=dtype), scale=tf.ones(1, dtype=dtype))
       y = Normal(loc=ed.dot(X, w) + b, scale=0.1 * tf.ones(N, dtype=dtype))
 
+      proposal_w = Normal(loc=w, scale=0.5 * tf.ones(D, dtype=dtype))
+      proposal_b = Normal(loc=b, scale=0.5 * tf.ones(1, dtype=dtype))
+
       n_samples = 2000
       if not default:
         qw = Empirical(tf.Variable(tf.zeros([n_samples, D], dtype=dtype)))
         qb = Empirical(tf.Variable(tf.zeros([n_samples, 1], dtype=dtype)))
-        inference = ed.HMC({w: qw, b: qb}, data={X: X_train, y: y_train})
+        inference = ed.ReplicaExchangeMC(
+            {w: qw, b: qb}, {w: proposal_w, b: proposal_b},
+            data={X: X_train, y: y_train})
       else:
-        inference = ed.HMC([w, b], data={X: X_train, y: y_train})
+        inference = ed.ReplicaExchangeMC(
+            [w, b], {w: proposal_w, b: proposal_b},
+            data={X: X_train, y: y_train})
         qw = inference.latent_vars[w]
         qb = inference.latent_vars[b]
-      inference.run(step_size=0.01)
+      inference.run()
 
       self.assertAllClose(qw.mean().eval(), w_true, rtol=5e-1, atol=5e-1)
       self.assertAllClose(qb.mean().eval(), [0.0], rtol=5e-1, atol=5e-1)
@@ -101,26 +108,6 @@ class test_hmc_class(tf.test.TestCase):
     self._test_linear_regression(False, tf.float32)
     self._test_linear_regression(True, tf.float64)
     self._test_linear_regression(False, tf.float64)
-
-  def test_indexedslices(self):
-    """Test that gradients accumulate when tf.gradients doesn't return
-    tf.Tensor (IndexedSlices)."""
-    with self.test_session() as sess:
-      N = 10  # number of data points
-      K = 2  # number of clusters
-      T = 1  # number of MCMC samples
-
-      x_data = np.zeros(N, dtype=np.float32)
-
-      mu = Normal(0.0, 1.0, sample_shape=K)
-      c = Categorical(logits=tf.zeros(N))
-      x = Normal(tf.gather(mu, c), tf.ones(N))
-
-      qmu = Empirical(params=tf.Variable(tf.ones([T, K])))
-      qc = Empirical(params=tf.Variable(tf.ones([T, N])))
-
-      inference = ed.HMC({mu: qmu}, data={x: x_data})
-      inference.initialize()
 
 if __name__ == '__main__':
   ed.set_seed(42)
